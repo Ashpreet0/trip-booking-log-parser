@@ -4,8 +4,9 @@ Reads the trip booking log line by line and prints a summary of processed, error
 
 ## Normalisation rules
 
+- Each line is trimmed and one trailing `,` is removed before parsing, because the dump is a JSON array written one record per line (`{...},`).
 - `level` is compared after `strip().upper()`, so `ERROR`, `error` and ` Error ` all count as error-level. This log only ever spells it `ERROR`.
-- A line is malformed if it isn't valid JSON, isn't a JSON object, or is missing any of `timestamp`, `level`, `service`, `message` as a non-empty string (see Log format notes). Blank lines count as malformed.
+- A line is malformed if it isn't valid JSON, isn't a JSON object, or is missing any of `timestamp`, `level`, `service`, `message` as a non-empty string (see Log format notes). Blank lines and the array's `[` / `]` lines count as malformed.
 - Malformed lines are counted and skipped; the parser never stops on a bad line.
 
 ## Summary output
@@ -17,14 +18,16 @@ python3 parse_log.py trip_booking.log
 ```
 processed: 42
 error-level: 9
-malformed: 1
+malformed: 3
 ```
 
 Checks against the file itself:
 
-- `wc -l < trip_booking.log` → `43`, and processed + malformed = 42 + 1 = 43.
+- The file has **45 lines** (`grep -c '' trip_booking.log` → `45`), and processed + malformed = 42 + 3 = 45.
+- `wc -l < trip_booking.log` prints `44`, not 45, because `wc` counts newline characters and the last line (`]`) has no newline after it. The file is kept byte-for-byte as downloaded, so that newline was not added.
+- The 3 malformed lines are line 1 (`[`), line 44 (truncated record) and line 45 (`]`).
 - `level` is only ever spelled `ERROR` (`grep -oiE '"level": *"[^"]*"' trip_booking.log | sort | uniq -c` shows `DEBUG` 2, `ERROR` 10, `INFO` 23, `WARN` 8, no lowercase or other variants).
-- The raw file has 10 `ERROR` lines but the parser reports 9: the 10th is line 43, which has no `message` and is skipped as malformed.
+- The raw file has 10 `ERROR` lines but the parser reports 9: the 10th is line 44, which has no `message` and is skipped as malformed.
 
 ## Testing
 
@@ -34,13 +37,13 @@ Python 3 standard library only, no dependencies.
 python3 -m unittest -v
 ```
 
-The tests cover valid, invalid-JSON, non-object, missing-field and blank lines, a lowercase `level`, and check that processed + malformed equals the line count of `trip_booking.log`.
+The tests cover valid, trailing-comma, array-bracket, invalid-JSON, non-object, missing-field and blank lines, a lowercase `level`, and check that processed + malformed equals the line count of `trip_booking.log`.
 
 ## Docker
 
 ## Log format notes
 
-`trip_booking.log` is JSON Lines: one JSON object per line, 43 lines.
+`trip_booking.log` is the scenario download `Trip-Booking Outage Incident Log Dump (10 March 2025).jsonl`, copied in unchanged. Despite the `.jsonl` name it is a JSON array split one record per line: line 1 is `[`, lines 2–44 are 43 records each ending in `,` (except the last), and line 45 is `]` with no trailing newline. 45 lines in total.
 
 Fields each line carries:
 
@@ -57,8 +60,8 @@ Fields each line carries:
 
 What the inspection found:
 
-- Every line parses as JSON; there are no syntactically broken lines in this file.
-- Line 43 (`trip-dispatch`, `ERROR`) is truncated: it has no `message` and no `duration_ms`.
-- Lines 22 and 43 have corrupted `request_id` values (`req_1f76b0d девять`, `req_0d47eb style`).
+- Read as-is, no record line is valid JSON on its own because of the trailing comma; with the comma removed, all 43 records parse. The `[` and `]` lines are not records.
+- Line 44 (`trip-dispatch`, `ERROR`) is truncated: it has no `message` and no `duration_ms`.
+- Lines 23 and 44 have corrupted `request_id` values (`req_1f76b0d девять`, `req_0d47eb style`).
 
-**A line is usable only if** it is valid JSON, is an object, and has `timestamp`, `level`, `service` and `message` as non-empty strings. Everything else (`host`, `request_id`, `trip_id`, `duration_ms`) is optional because `trip_id`/`duration_ms` are legitimately null and a bad `request_id` doesn't stop the event being counted. Lines that fail this are counted as malformed and skipped, so line 43 is malformed and line 22 is processed.
+**A line is usable only if** it is valid JSON, is an object, and has `timestamp`, `level`, `service` and `message` as non-empty strings. Everything else (`host`, `request_id`, `trip_id`, `duration_ms`) is optional because `trip_id`/`duration_ms` are legitimately null and a bad `request_id` doesn't stop the event being counted. Lines that fail this are counted as malformed and skipped, so line 44 is malformed and line 23 is processed.
