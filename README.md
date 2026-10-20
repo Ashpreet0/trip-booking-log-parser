@@ -10,6 +10,22 @@ Reads the trip booking log line by line and prints a summary of processed, error
 
 ## Summary output
 
+```bash
+python3 parse_log.py trip_booking.log
+```
+
+```
+processed: 42
+error-level: 9
+malformed: 1
+```
+
+Checks against the file itself:
+
+- `wc -l < trip_booking.log` → `43`, and processed + malformed = 42 + 1 = 43.
+- `level` is only ever spelled `ERROR` (`grep -oiE '"level": *"[^"]*"' trip_booking.log | sort | uniq -c` shows `DEBUG` 2, `ERROR` 10, `INFO` 23, `WARN` 8, no lowercase or other variants).
+- The raw file has 10 `ERROR` lines but the parser reports 9: the 10th is line 43, which has no `message` and is skipped as malformed.
+
 ## Testing
 
 Python 3 standard library only, no dependencies.
