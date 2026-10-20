@@ -4,9 +4,21 @@ Reads the trip booking log line by line and prints a summary of processed, error
 
 ## Normalisation rules
 
+- `level` is compared after `strip().upper()`, so `ERROR`, `error` and ` Error ` all count as error-level. This log only ever spells it `ERROR`.
+- A line is malformed if it isn't valid JSON, isn't a JSON object, or is missing any of `timestamp`, `level`, `service`, `message` as a non-empty string (see Log format notes). Blank lines count as malformed.
+- Malformed lines are counted and skipped; the parser never stops on a bad line.
+
 ## Summary output
 
 ## Testing
+
+Python 3 standard library only, no dependencies.
+
+```bash
+python3 -m unittest -v
+```
+
+The tests cover valid, invalid-JSON, non-object, missing-field and blank lines, a lowercase `level`, and check that processed + malformed equals the line count of `trip_booking.log`.
 
 ## Docker
 
