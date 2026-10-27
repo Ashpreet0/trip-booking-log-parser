@@ -1,191 +1,140 @@
 # Normalisation rules
 
-These rules turn an error message into a stable **cluster key**. Each rule swaps one kind of changing part for a fixed placeholder token, so two errors describing the same failure end up with the same key and the summarizer can group and count them.
+Spec for turning an error `message` into a stable **cluster key**. Each rule swaps one kind of changing part for a fixed placeholder token, so errors that describe the same failure get the same key and the incident summarizer can group and count them. The summarizer applies these rules exactly as written: same patterns, same tokens, same order.
 
-The incident summarizer applies these rules exactly as written: same patterns, same tokens, same order. Every example below is a real `message` from [`trip_booking.log`](trip_booking.log), copied from the file by script with its line number.
+## Source
 
-## How the rules are applied
+- File: [`trip_booking.log`](trip_booking.log), the resource download `Trip-Booking Outage Incident Log Dump (10 March 2025).jsonl`, byte-identical (SHA-256 `cfcf7c74fa968b5d7cff6640f5dab4efa11e6563425a42dd53f67d234c34f3e2`).
+- 80 events, 24 at `ERROR`.
+- The stage brief describes 43 events. The download currently served is this 80-event version; an earlier download of the same resource (43 events, JSON-array format) had only 10 ERROR lines. This spec is built on the current 80-event file.
+- Every example below is copied from the file by script, with its line number, and checked against it.
 
-- Applied to the `message` field only. `service` is grouped on separately and is never rewritten.
-- Applied in order 1 → 5, each rule to the output of the one before. **The order is part of the spec** (see [Why the order matters](#why-the-order-matters)).
-- Patterns are Python `re` syntax, applied with `re.sub(pattern, token, message)`, case-sensitive.
-- Anything not matched is kept exactly as is: words, punctuation, units, `key=` names.
+## ERROR lines, sorted by message
 
-| # | Changing part | Token | Pattern |
+Printed with the Stage 1 parser's own `parse_line`, so only lines it accepts are included. Run from the repo root:
+
+```bash
+python3 -c 'import parse_log
+rows = [r for r in map(parse_log.parse_line, open("trip_booking.log", encoding="utf-8")) if r and r["level"].strip().upper() == "ERROR"]
+for r in sorted(rows, key=lambda r: r["message"]): print(r["service"], "|", r["message"])
+print(len(rows), "ERROR lines")'
+```
+
+Output, as printed:
+
+```
+rider-booking-api | Booking request req_2c8f15a9d04e failed for trip 5be09f3a-1c74-4d2e-8f61-7a30b9e2c4d5 status=503 retry_after=30
+rider-booking-api | Booking request req_3e7b0f19c2d8 failed for trip b1a59e3d-7f02-4c68-9d4e-0a8f2c6b5e13 status=503 retry_after=60
+rider-booking-api | Booking request req_47c0d9a3e1f6 failed for trip c6b14f8e-0d32-4a59-8e7c-1f9a3d5b2c40 status=503 retry_after=30
+rider-booking-api | Booking request req_7a1c58e03b9f rejected: dispatch unavailable (503)
+rider-booking-api | Booking request req_a95d2c47b08e failed for trip 9d0e3b6c-4f21-4a87-8c5d-e1f72a0b9c64 status=503 retry_after=30
+matching-engine-v2 | Candidate pool query exceeded deadline deadline=2025-03-10T03:06:07.774Z elapsed_ms=4998 pool_size=412
+matching-engine-v2 | Candidate pool query exceeded deadline deadline=2025-03-10T03:09:22.412Z elapsed_ms=5003 pool_size=389
+matching-engine-v2 | Candidate pool query exceeded deadline deadline=2025-03-10T03:14:25.618Z elapsed_ms=5011 pool_size=451
+payments-authorizer | Card auth call timed out for req_1b77e0a95c3f after 2500ms
+payments-authorizer | Card auth call timed out for req_9c04e71b2a6d after 2500ms
+trip-dispatch | Dispatch failed for trip 3c9a7e2f-1b50-4d84-a6c3-f8e0d2b1a796: upstream matching-engine-v2 timeout after 5000ms (attempt 1/3)
+trip-dispatch | Dispatch failed for trip a71d4c02-8e3f-4b19-b6d2-5f0e9c7a3b18: upstream matching-engine-v2 timeout after 5000ms (attempt 3/3)
+trip-dispatch | Dispatch failed for trip c3f81e5d-27a0-4b96-9d4c-0e6b2a8f17d3: upstream matching-engine-v2 timeout after 5000ms (attempt 2/3)
+trip-dispatch | Dispatch failed for trip f04b7a2c-6d81-4e39-b2a5-9c3e0d1f8b47: upstream matching-engine-v2 timeout after 5000ms (attempt 3/3)
+trip-dispatch | Dispatch timeout for trip 5b8e2d63-a1f4-47c9-8d0e-9c3f6a2b1e58 after 5000ms waiting on matching-engine-v2 (attempt 1/3)
+trip-dispatch | Dispatch timeout for trip a7d41c92-3e5f-4b80-8c16-2f9e0d7b4a31 after 5000ms waiting on matching-engine-v2 (attempt 3/3)
+trip-dispatch | Failed to assign driver for trip 21a9f60d-3c85-4b71-8e49-6a0d7b2c5f13 after 3 retries: upstream timeout 5000ms
+trip-dispatch | Failed to assign driver for trip 4c9f20b8-7a61-4e35-8d0c-1b93e6a5c724 after 3 retries: upstream timeout 5000ms
+trip-dispatch | Failed to assign driver for trip 8e51c74b-0f28-4a96-b3d7-5c81a2e40f9b after 2 retries: upstream timeout 4500ms
+trip-dispatch | Failed to assign driver for trip d6208af1-9b43-4c07-a58e-3f7d1c90b62a after 3 retries: upstream timeout 5000ms
+trip-dispatch | Failed to assign driver for trip f30c8b47-2a91-4d68-95b2-0e7c1a86d4f5 after 3 retries: upstream matching-engine-v2 timeout 5000ms
+payments-authorizer | Payment hold failed for trip 0e5d8b3c-9a47-4f21-b6e8-2c1f7a0d4b93 amount=31.20 code=GATEWAY_TIMEOUT
+payments-authorizer | Payment hold failed for trip 48d2f0a6-5c1e-4b93-87af-1e9c3b6d2a05 amount=18.75 code=GATEWAY_TIMEOUT
+driver-location | Stale location for driver d_48213 age=91s
+24 ERROR lines
+```
+
+## Changing parts
+
+One row per part of a message that changes between lines describing the same failure.
+
+| Changing part | What it looks like | Token | Real example (line: raw → token) |
+|---|---|---|---|
+| UUID (36-character trip ID) | 36 chars: 8-4-4-4-12 lowercase hex | `<uuid>` | line 20 (`trip-dispatch`): `4c9f20b8-7a61-4e35-8d0c-1b93e6a5c724` → `<uuid>` |
+| Numeric ID (rider, driver) | one letter, `_`, digits | `<id>` | line 38 (`driver-location`): `d_48213` → `<id>` |
+| Number value | integer or decimal, often with a unit (`ms`, `s`) or after `=` | `<n>` | line 35 (`payments-authorizer`): `2500` → `<n>` |
+| ISO 8601 timestamp | `YYYY-MM-DDTHH:MM:SS[.mmm]Z` inside the text | `<ts>` | line 50 (`matching-engine-v2`): `2025-03-10T03:06:07.774Z` → `<ts>` |
+| Request ID | `req_` + hex | `<req>` | line 35 (`payments-authorizer`): `req_1b77e0a95c3f` → `<req>` |
+
+The request ID row is an addition to the four required rows: `req_1b77e0a95c3f` isn't a plain number or a UUID, so without its own rule every `Card auth call timed out for req_…` error would stay its own key.
+
+## Rule order
+
+Most specific first: fixed shapes with literal anchors (`T`, `Z`, dashes, `req_`) run before the catch-all number rule.
+
+| Rank | Rule | Token | Pattern |
 |---|---|---|---|
 | 1 | ISO 8601 timestamp | `<ts>` | `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z` |
-| 2 | UUID (trip IDs) | `<uuid>` | `\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b` |
+| 2 | UUID (36-character trip ID) | `<uuid>` | `\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b` |
 | 3 | Request ID | `<req>` | `\breq_[0-9a-f]+\b` |
-| 4 | Prefixed numeric ID (rider, driver) | `<id>` | `\b[a-z]_\d+\b` |
-| 5 | Number (counts, durations, amounts, status codes) | `<n>` | `(?<![\w.-])\d+(?:\.\d+)?` |
+| 4 | Numeric ID (rider, driver) | `<id>` | `\b[a-z]_\d+\b` |
+| 5 | Number value | `<n>` | `(?<![\w.-])\d+(?:\.\d+)?` |
 
-## Rule 1: ISO 8601 timestamp → `<ts>`
+Why each rule is in its spot:
 
-Pattern: `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z`
+1. **ISO 8601 timestamp → `<ts>`.** Its digits would be cut up if it ran after rule 5. Moved last, 6 keys change; line 16 becomes `Heartbeat window advanced to <n>-03-10T02:<n>:<n>Z drivers=<n>` instead of `Heartbeat window advanced to <ts> drivers=<n>`. It has no overlap with rules 2–4, so its place among them doesn't change any key; it goes first as the most specific shape.
+2. **UUID (36-character trip ID) → `<uuid>`.** If it ran after rule 5, the UUID's leading digits would be replaced first and the rest left behind. Moved last, 18 keys change; line 2 becomes `Booking request <req> accepted for trip <n>f2c9a1e-6b7d-4e08-9a55-0c1d2e3f4a5b status=<n>` instead of `Booking request <req> accepted for trip <uuid> status=<n>`, a key no other trip shares.
+3. **Request ID → `<req>`.** Placed before rule 5 so a request ID is replaced whole. In this dump moving it later changes 0 keys, because rule 5 skips digits glued to `_` or a letter; it runs here so it doesn't depend on that. If it ran after rule 5 and rule 5 lost that guard, `req_1b77e0a95c3f` would come out half-replaced.
+4. **Numeric ID (rider, driver) → `<id>`.** Same reason as rule 3: replaces `d_48213` whole as `<id>`. Moving it after rule 5 changes 0 keys in this dump (rule 5 skips digits after `_`), but it must stay before rule 5 rather than rely on that guard.
+5. **Number value → `<n>`.** The catch-all, so it runs last. Moved first, it eats the start of timestamps and UUIDs before rules 1 and 2 see them: 24 keys change.
 
-Timestamps embedded in the message (deadlines, snapshot times, window marks) change on every line. Milliseconds are optional, so both `02:50:40Z` and `03:06:07.774Z` match. Runs first so rule 5 never splits its digits.
+**Checked:** all 120 possible orders were run over all 80 messages. 40 give the same keys as this order, and every one of them has `ts before n` and `uuid before n`. So the hard constraints are timestamps and UUIDs before numbers; the rest of the order is by specificity.
 
-Line 16 (`driver-location`, `DEBUG`):
+## Collapse check
 
-```
-before: Heartbeat window advanced to 2025-03-10T02:50:40Z drivers=1842
-after:  Heartbeat window advanced to <ts> drivers=1842
-```
+Line 45 and line 60 say the same thing (`rider-booking-api`: a booking failed with 503) but differ in request ID, trip UUID and `retry_after`. Each is run through the rules in order:
 
-Line 50 (`matching-engine-v2`, `ERROR`):
-
-```
-before: Candidate pool query exceeded deadline deadline=2025-03-10T03:06:07.774Z elapsed_ms=4998 pool_size=412
-after:  Candidate pool query exceeded deadline deadline=<ts> elapsed_ms=4998 pool_size=412
-```
-
-Matches 6 of 80 messages.
-
-## Rule 2: UUID (trip IDs) → `<uuid>`
-
-Pattern: `\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`
-
-Every trip has its own UUID, so without this rule each failed trip would be its own cluster. Lowercase hex in 8-4-4-4-12 groups, the only UUID form in the dump. Runs before rule 5, which would otherwise eat its leading digits.
-
-Line 20 (`trip-dispatch`, `ERROR`):
+Line 45:
 
 ```
-before: Failed to assign driver for trip 4c9f20b8-7a61-4e35-8d0c-1b93e6a5c724 after 3 retries: upstream timeout 5000ms
-after:  Failed to assign driver for trip <uuid> after 3 retries: upstream timeout 5000ms
+raw:    Booking request req_2c8f15a9d04e failed for trip 5be09f3a-1c74-4d2e-8f61-7a30b9e2c4d5 status=503 retry_after=30
+rule 1: Booking request req_2c8f15a9d04e failed for trip 5be09f3a-1c74-4d2e-8f61-7a30b9e2c4d5 status=503 retry_after=30   (no change)
+rule 2: Booking request req_2c8f15a9d04e failed for trip <uuid> status=503 retry_after=30
+rule 3: Booking request <req> failed for trip <uuid> status=503 retry_after=30
+rule 4: Booking request <req> failed for trip <uuid> status=503 retry_after=30   (no change)
+rule 5: Booking request <req> failed for trip <uuid> status=<n> retry_after=<n>
 ```
 
-Line 43 (`trip-dispatch`, `ERROR`):
+Line 60:
 
 ```
-before: Dispatch failed for trip a71d4c02-8e3f-4b19-b6d2-5f0e9c7a3b18: upstream matching-engine-v2 timeout after 5000ms (attempt 3/3)
-after:  Dispatch failed for trip <uuid>: upstream matching-engine-v2 timeout after 5000ms (attempt 3/3)
+raw:    Booking request req_3e7b0f19c2d8 failed for trip b1a59e3d-7f02-4c68-9d4e-0a8f2c6b5e13 status=503 retry_after=60
+rule 1: Booking request req_3e7b0f19c2d8 failed for trip b1a59e3d-7f02-4c68-9d4e-0a8f2c6b5e13 status=503 retry_after=60   (no change)
+rule 2: Booking request req_3e7b0f19c2d8 failed for trip <uuid> status=503 retry_after=60
+rule 3: Booking request <req> failed for trip <uuid> status=503 retry_after=60
+rule 4: Booking request <req> failed for trip <uuid> status=503 retry_after=60   (no change)
+rule 5: Booking request <req> failed for trip <uuid> status=<n> retry_after=<n>
 ```
 
-Matches 32 of 80 messages.
-
-## Rule 3: Request ID → `<req>`
-
-Pattern: `\breq_[0-9a-f]+\b`
-
-`req_` plus hex, unique per request. It isn't a pure number, so rule 5 can't catch it. The rule takes any run of hex after `req_` rather than exactly 12 characters.
-
-Line 35 (`payments-authorizer`, `ERROR`):
+Final strings:
 
 ```
-before: Card auth call timed out for req_1b77e0a95c3f after 2500ms
-after:  Card auth call timed out for <req> after 2500ms
+line 45: Booking request <req> failed for trip <uuid> status=<n> retry_after=<n>
+line 60: Booking request <req> failed for trip <uuid> status=<n> retry_after=<n>
 ```
 
-Line 45 (`rider-booking-api`, `ERROR`):
+They match exactly: `True` from `norm(line_45) == norm(line_60)`.
+
+A second pair that exercises the timestamp rule, lines 50 and 57 (`matching-engine-v2`):
 
 ```
-before: Booking request req_2c8f15a9d04e failed for trip 5be09f3a-1c74-4d2e-8f61-7a30b9e2c4d5 status=503 retry_after=30
-after:  Booking request <req> failed for trip 5be09f3a-1c74-4d2e-8f61-7a30b9e2c4d5 status=503 retry_after=30
+raw 50:  Candidate pool query exceeded deadline deadline=2025-03-10T03:06:07.774Z elapsed_ms=4998 pool_size=412
+raw 57:  Candidate pool query exceeded deadline deadline=2025-03-10T03:09:22.412Z elapsed_ms=5003 pool_size=389
+final 50: Candidate pool query exceeded deadline deadline=<ts> elapsed_ms=<n> pool_size=<n>
+final 57: Candidate pool query exceeded deadline deadline=<ts> elapsed_ms=<n> pool_size=<n>
 ```
 
-Matches 17 of 80 messages.
+## Result on all ERROR lines
 
-## Rule 4: Prefixed numeric ID (rider, driver) → `<id>`
+The 24 ERROR lines become 10 keys (service + normalised message):
 
-Pattern: `\b[a-z]_\d+\b`
-
-A one-letter prefix, underscore, then digits: `r_772913` (rider), `d_48213` (driver). Replaced whole, so the prefix doesn't leave a stray `d_<n>`. Runs before rule 5.
-
-Line 11 (`rider-profile`, `INFO`):
-
-```
-before: Profile fetch completed rider=r_772913 cache=hit
-after:  Profile fetch completed rider=<id> cache=hit
-```
-
-Line 17 (`driver-location`, `WARN`):
-
-```
-before: Stale location for driver d_48213 age=41s
-after:  Stale location for driver <id> age=41s
-```
-
-Matches 4 of 80 messages.
-
-## Rule 5: Number (counts, durations, amounts, status codes) → `<n>`
-
-Pattern: `(?<![\w.-])\d+(?:\.\d+)?`
-
-Any integer or decimal not glued to a letter, `.` or `-` in front. It replaces `214`, `3` in `3s`, `842.6` and `500` in `500ms`, but keeps names that contain digits: `p99`, `/v2/`, `matching-engine-v2`, `us-east-1c`. Units stay (`<n>ms`, `<n>s`) because they say what kind of number it was. Runs last.
-
-Line 3 (`driver-location`, `INFO`):
-
-```
-before: Location batch flushed count=214 lag=3s
-after:  Location batch flushed count=<n> lag=<n>s
-```
-
-Line 7 (`api-gateway`, `WARN`):
-
-```
-before: Upstream p99 latency 842.6ms above target 500ms path=/v2/trips/dispatch
-after:  Upstream p99 latency <n>ms above target <n>ms path=/v2/trips/dispatch
-```
-
-Matches 78 of 80 messages.
-
-## Why the order matters
-
-If rule 5 ran first it would break IDs apart instead of replacing them. Line 2 with **only rule 5** applied:
-
-Line 2 (`rider-booking-api`, `INFO`):
-
-```
-before: Booking request req_1a0d73f5c98b accepted for trip 3f2c9a1e-6b7d-4e08-9a55-0c1d2e3f4a5b status=201
-wrong:  Booking request req_1a0d73f5c98b accepted for trip <n>f2c9a1e-6b7d-4e08-9a55-0c1d2e3f4a5b status=<n>
-```
-
-The UUID's leading `3` became `<n>`, leaving `<n>f2c9a1e-…`, which no other trip shares, so the cluster splits. In the correct order rules 2 and 3 take the IDs out first:
-
-Line 2 (`rider-booking-api`, `INFO`):
-
-```
-before: Booking request req_1a0d73f5c98b accepted for trip 3f2c9a1e-6b7d-4e08-9a55-0c1d2e3f4a5b status=201
-after:  Booking request <req> accepted for trip <uuid> status=<n>
-```
-
-## All rules together
-
-Different trips, hosts, requests and timings, same failure, one key:
-
-Line 43 (`trip-dispatch`, `ERROR`):
-
-```
-before: Dispatch failed for trip a71d4c02-8e3f-4b19-b6d2-5f0e9c7a3b18: upstream matching-engine-v2 timeout after 5000ms (attempt 3/3)
-after:  Dispatch failed for trip <uuid>: upstream matching-engine-v2 timeout after <n>ms (attempt <n>/<n>)
-```
-
-Line 54 (`trip-dispatch`, `ERROR`):
-
-```
-before: Dispatch failed for trip f04b7a2c-6d81-4e39-b2a5-9c3e0d1f8b47: upstream matching-engine-v2 timeout after 5000ms (attempt 3/3)
-after:  Dispatch failed for trip <uuid>: upstream matching-engine-v2 timeout after <n>ms (attempt <n>/<n>)
-```
-
-Line 50 (`matching-engine-v2`, `ERROR`):
-
-```
-before: Candidate pool query exceeded deadline deadline=2025-03-10T03:06:07.774Z elapsed_ms=4998 pool_size=412
-after:  Candidate pool query exceeded deadline deadline=<ts> elapsed_ms=<n> pool_size=<n>
-```
-
-Line 57 (`matching-engine-v2`, `ERROR`):
-
-```
-before: Candidate pool query exceeded deadline deadline=2025-03-10T03:09:22.412Z elapsed_ms=5003 pool_size=389
-after:  Candidate pool query exceeded deadline deadline=<ts> elapsed_ms=<n> pool_size=<n>
-```
-
-## Result on the dump
-
-Applied to the 24 ERROR lines, the rules produce 10 distinct keys (service + normalised message):
-
-| Count | Service | Normalised message |
+| Count | Service | Key |
 |---|---|---|
 | 4 | `trip-dispatch` | `Failed to assign driver for trip <uuid> after <n> retries: upstream timeout <n>ms` |
 | 4 | `trip-dispatch` | `Dispatch failed for trip <uuid>: upstream matching-engine-v2 timeout after <n>ms (attempt <n>/<n>)` |
@@ -198,10 +147,10 @@ Applied to the 24 ERROR lines, the rules produce 10 distinct keys (service + nor
 | 1 | `driver-location` | `Stale location for driver <id> age=<n>s` |
 | 1 | `trip-dispatch` | `Failed to assign driver for trip <uuid> after <n> retries: upstream matching-engine-v2 timeout <n>ms` |
 
-Names with digits that survive normalisation, checked across all 80 messages: `fs-gbm-v14`, `geo-index-v3`, `matching-engine-v2`, `nyc-midtown-07`, `p99`, `p99_ms`, `us-east-1a`, `us-east-1c`, `v2`. None of them is a changing value.
+Names containing digits that survive, across all 80 messages: `fs-gbm-v14`, `geo-index-v3`, `matching-engine-v2`, `nyc-midtown-07`, `p99`, `p99_ms`, `us-east-1a`, `us-east-1c`, `v2`. None is a changing value.
 
 ## Known limits
 
-- **Same failure, different wording.** `trip-dispatch` reports the matching-engine timeout three ways: `Failed to assign driver …` (lines 20, 31, 33, 37, 39), `Dispatch failed for trip …` and `Dispatch timeout for trip …` (lines 43, 47, 54, 62, 73, 78). They stay separate keys. The rules swap changing values; they never rewrite wording.
-- **Text codes aren't normalised.** `code=GATEWAY_TIMEOUT` stays as text. A different code would be a different key, which is intended.
-- **Only these ID shapes are caught.** The corrupted `req_1f76b0d девять` is in the `request_id` field of line 22, not in any message, so it never reaches these rules.
+- **Same failure, different wording stays split.** `trip-dispatch` words the matching-engine timeout three ways (`Failed to assign driver…`, `Dispatch failed…`, `Dispatch timeout…`). The rules replace values, they never rewrite text.
+- **Text codes stay as text.** `code=GATEWAY_TIMEOUT` is kept; a different code is meant to be a different key.
+- **Only these ID shapes are caught.** The corrupted `req_1f76b0d девять` is only in line 22's `request_id` field, never in a message.
