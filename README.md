@@ -4,6 +4,8 @@ Streams the trip booking incident log one line at a time and prints how many lin
 
 ## Normalisation rules
 
+Message normalisation for clustering (UUIDs, timestamps, request IDs, numeric IDs, numbers → placeholder tokens) is specified in [NORMALISATION_RULES.md](NORMALISATION_RULES.md). The rules below are the parser's line-validity rules.
+
 - Each line is parsed on its own with `json.loads`; nothing is joined across lines and the file is never loaded whole.
 - A line is **malformed** if it is not valid JSON on its own, is not a JSON object, or is missing any of `timestamp`, `level`, `service`, `message` as a non-empty string. Blank lines are malformed too.
 - Malformed lines are counted in their own total and skipped; the parser never stops on a bad line.
