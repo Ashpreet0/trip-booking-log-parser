@@ -25,6 +25,8 @@ class SummarizeTest(unittest.TestCase):
             "not json",
         ]
         out = summarize(lines)
+        self.assertEqual(list(out), ["total_lines_processed", "total_error_lines", "clusters"])
+        self.assertEqual(list(out["clusters"][0]), ["normalised_message", "service", "count", "first_seen", "last_seen"])
         self.assertEqual(out["total_lines_processed"], 4)
         self.assertEqual(out["total_error_lines"], 3)
         self.assertEqual([(c["service"], c["count"]) for c in out["clusters"]], [("a", 2), ("b", 1)])

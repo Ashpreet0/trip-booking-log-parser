@@ -94,7 +94,7 @@ from summarize import summarize
 m = json.loads(open("trip_booking.log", encoding="utf-8").readlines()[34])["message"]
 row = lambda svc, ts: json.dumps({"timestamp": ts, "level": "ERROR", "service": svc, "message": m})
 lines = [row("payments-authorizer", "2025-03-10T03:00:55.409Z"), row("payments-authorizer", "2025-03-10T03:02:27.734Z"), row("payments-ledger", "2025-03-10T03:01:00.000Z")]
-for c in summarize(lines)["clusters"]: print(c["service"], c["count"], c["message"])'
+for c in summarize(lines)["clusters"]: print(c["service"], c["count"], c["normalised_message"])'
 ```
 
 ```
@@ -116,35 +116,35 @@ python3 summarize.py trip_booking.log
   "total_error_lines": 24,
   "clusters": [
     {
-      "message": "Failed to assign driver for trip <UUID> after <NUM> retries: upstream timeout <NUM>ms",
+      "normalised_message": "Failed to assign driver for trip <UUID> after <NUM> retries: upstream timeout <NUM>ms",
       "service": "trip-dispatch",
       "count": 4,
       "first_seen": "2025-03-10T02:53:30.905Z",
       "last_seen": "2025-03-10T03:01:14.208Z"
     },
     {
-      "message": "Dispatch failed for trip <UUID>: upstream matching-engine-v2 timeout after <NUM>ms (attempt <NUM>/<NUM>)",
+      "normalised_message": "Dispatch failed for trip <UUID>: upstream matching-engine-v2 timeout after <NUM>ms (attempt <NUM>/<NUM>)",
       "service": "trip-dispatch",
       "count": 4,
       "first_seen": "2025-03-10T03:03:06.412Z",
       "last_seen": "2025-03-10T03:12:04.851Z"
     },
     {
-      "message": "Booking request <REQ> failed for trip <UUID> status=<NUM> retry_after=<NUM>",
+      "normalised_message": "Booking request <REQ> failed for trip <UUID> status=<NUM> retry_after=<NUM>",
       "service": "rider-booking-api",
       "count": 4,
       "first_seen": "2025-03-10T03:03:58.640Z",
       "last_seen": "2025-03-10T03:22:03.982Z"
     },
     {
-      "message": "Candidate pool query exceeded deadline deadline=<TS> elapsed_ms=<NUM> pool_size=<NUM>",
+      "normalised_message": "Candidate pool query exceeded deadline deadline=<TS> elapsed_ms=<NUM> pool_size=<NUM>",
       "service": "matching-engine-v2",
       "count": 3,
       "first_seen": "2025-03-10T03:06:12.774Z",
       "last_seen": "2025-03-10T03:14:30.618Z"
     },
     {
-      "message": "Card auth call timed out for <REQ> after <NUM>ms",
+      "normalised_message": "Card auth call timed out for <REQ> after <NUM>ms",
       "service": "payments-authorizer",
       "count": 2,
       "first_seen": "2025-03-10T03:00:55.409Z",
@@ -168,7 +168,7 @@ print(len(counts), "clusters, counts", counts, "highest first:", counts == sorte
 
 ### Verdict
 
-Yes, `trip-dispatch` really fails: it owns the top cluster (4 errors, first seen 02:53:30 UTC, the earliest error in the log) and the second one (4), so 8 of the 24 error lines in the output are trip-dispatch failing to assign drivers. It is not the root cause, though: cluster 2's messages name `matching-engine-v2` as the upstream that timed out, and `matching-engine-v2` logs its own 3 deadline errors in cluster 4. Fix the matching engine; trip-dispatch and the rider-booking-api 503s (4) recover with it.
+Yes, `trip-dispatch` really fails: it has the top two clusters (4 + 4 = 8 of the 24 error lines) and the earliest error in the summary, first seen 02:53:30 UTC, before `payments-authorizer` (03:00:55), `rider-booking-api` (03:03:58) and `matching-engine-v2` (03:06:12). The summary does not show what made it fail: cluster 1's messages only say "upstream timeout" without naming the upstream, the first cluster in the summary that names `matching-engine-v2` (cluster 2) starts at 03:03:06, and `matching-engine-v2`'s own errors (cluster 4, 3) start 03:06:12, about 13 minutes after dispatch began failing. Start the investigation at trip-dispatch's upstream calls from 02:53:30; `matching-engine-v2` is the leading suspect, not a proven cause.
 
 ## Testing
 

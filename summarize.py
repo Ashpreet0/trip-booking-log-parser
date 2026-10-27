@@ -36,7 +36,7 @@ def summarize(lines, top=5):
         ts = record["timestamp"]
         c = clusters.get(key)
         if c is None:
-            clusters[key] = {"message": key[1], "service": key[0], "count": 1, "first_seen": ts, "last_seen": ts}
+            clusters[key] = {"normalised_message": key[1], "service": key[0], "count": 1, "first_seen": ts, "last_seen": ts}
         else:
             c["count"] += 1
             c["first_seen"] = min(c["first_seen"], ts)  # ISO 8601 UTC strings sort in time order
