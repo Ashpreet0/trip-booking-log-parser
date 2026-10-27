@@ -39,6 +39,18 @@ wc -l trip_booking.log
 - **Processed: 80**
 - **Malformed: 0**
 - Processed + malformed = 80 + 0 = 80 = total lines.
+
+The same sum, computed from the parser's output rather than typed:
+
+```bash
+python3 parse_log.py trip_booking.log | awk -F': ' '/^processed/{p=$2} /^malformed/{m=$2} END{print "processed + malformed = " p " + " m " = " p+m}'; wc -l < trip_booking.log | awk '{print "wc -l = " $1}'
+```
+
+```
+processed + malformed = 80 + 0 = 80
+wc -l = 80
+```
+
 - Error-level: 24, which matches `grep -c '"level": "ERROR"' trip_booking.log` → `24`.
 
 ## Testing
