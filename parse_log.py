@@ -1,6 +1,7 @@
 """Summarise a trip booking JSON Lines log: processed, error-level and malformed counts."""
 import json
 import sys
+from datetime import datetime
 
 REQUIRED = ("timestamp", "level", "service", "message")
 
@@ -14,6 +15,12 @@ def parse_line(line):
     if not isinstance(record, dict):
         return None
     if not all(isinstance(record.get(k), str) and record[k].strip() for k in REQUIRED):
+        return None
+    try:
+        # a timestamp is a point in time; one without a timezone can't be ordered against the rest
+        if datetime.fromisoformat(record["timestamp"]).tzinfo is None:
+            return None
+    except ValueError:
         return None
     return record
 

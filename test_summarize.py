@@ -1,5 +1,6 @@
 import hashlib
 import json
+from datetime import datetime
 import subprocess
 import sys
 from pathlib import Path
@@ -41,8 +42,17 @@ def test_normalize_table(n, expected):
     assert normalize(message(n)) == expected
 
 
-def test_repeats_normalise_identically():
-    assert normalize(message(20)) == normalize(message(31)) == normalize(message(37))
+# Repeats where more than one kind of value changes, so each rule involved has to hold for them to collapse.
+COLLAPSE_PAIRS = [
+    (45, 60, "Booking request <REQ> failed for trip <UUID> status=<NUM> retry_after=<NUM>"),  # request ID, UUID, retry_after 30 vs 60
+    (50, 57, "Candidate pool query exceeded deadline deadline=<TS> elapsed_ms=<NUM> pool_size=<NUM>"),  # timestamp, elapsed_ms, pool_size
+]
+
+
+@pytest.mark.parametrize("a, b, expected", COLLAPSE_PAIRS, ids=[f"line{a}-line{b}" for a, b, _ in COLLAPSE_PAIRS])
+def test_repeats_normalise_identically(a, b, expected):
+    assert message(a) != message(b)
+    assert normalize(message(a)) == normalize(message(b)) == expected
 
 
 def test_same_message_in_two_services_is_two_clusters():
@@ -117,7 +127,7 @@ def test_every_cluster_in_the_real_run_is_complete():
         group = [r["timestamp"] for r in records
                  if r["level"] == "ERROR" and r["service"] == c["service"] and normalize(r["message"]) == c["normalised_message"]]
         assert c["count"] == len(group)
-        assert (c["first_seen"], c["last_seen"]) == (min(group), max(group))
+        assert (c["first_seen"], c["last_seen"]) == (min(group, key=datetime.fromisoformat), max(group, key=datetime.fromisoformat))
     assert sum(counts) <= out["total_error_lines"]
 
 
@@ -127,7 +137,21 @@ def test_cli_prints_only_one_json_object():
     assert run.stderr == ""
 
 
-@pytest.mark.xfail(strict=True, reason="known bug: first_seen compares timestamps as text, so 00.500Z sorts before 00Z")
-def test_first_seen_with_mixed_timestamp_precision():
+def test_first_and_last_seen_compare_time_not_text():
+    # as text ".500Z" < "Z", so a string compare would get both of these backwards
     out = summarize([line("a", "x", ts="2025-03-10T03:00:00.500Z"), line("a", "x", ts="2025-03-10T03:00:00Z")])
-    assert out["clusters"][0]["first_seen"] == "2025-03-10T03:00:00Z"
+    c = out["clusters"][0]
+    assert (c["first_seen"], c["last_seen"]) == ("2025-03-10T03:00:00Z", "2025-03-10T03:00:00.500Z")
+
+
+def test_tiebreak_compares_time_not_text():
+    late = line("late", "x", ts="2025-03-10T03:00:00.500Z")
+    early = line("early", "x", ts="2025-03-10T03:00:00Z")
+    assert [c["service"] for c in summarize([late, early])["clusters"]] == ["early", "late"]
+
+
+def test_unusable_timestamps_are_malformed_not_a_crash():
+    record = json.loads(LOG_LINES[19])  # real ERROR line 20
+    bad = [json.dumps({**record, "timestamp": ts}) for ts in ("yesterday", "2025-03-10T02:53:30.905")]  # not ISO; no timezone
+    out = summarize(LOG_LINES + bad)
+    assert (out["total_lines_processed"], out["total_error_lines"]) == (80, 24)

@@ -2,6 +2,7 @@
 import json
 import re
 import sys
+from datetime import datetime
 
 from parse_log import parse_line
 
@@ -25,6 +26,7 @@ def normalize(message):
 def summarize(lines, top=5):
     processed = 0
     clusters = {}
+    times = {}  # key -> [first, last] as datetimes; the output keeps the original strings
     for line in lines:
         record = parse_line(line)
         if record is None:
@@ -34,18 +36,23 @@ def summarize(lines, top=5):
             continue
         key = (record["service"], normalize(record["message"]))
         ts = record["timestamp"]
+        when = datetime.fromisoformat(ts)  # parse_line guarantees ISO 8601 with a timezone
         c = clusters.get(key)
         if c is None:
             clusters[key] = {"normalised_message": key[1], "service": key[0], "count": 1, "first_seen": ts, "last_seen": ts}
-        else:
-            c["count"] += 1
-            c["first_seen"] = min(c["first_seen"], ts)  # ISO 8601 UTC strings sort in time order
-            c["last_seen"] = max(c["last_seen"], ts)
-    ranked = sorted(clusters.values(), key=lambda c: (-c["count"], c["first_seen"]))  # ties: earliest first
+            times[key] = [when, when]
+            continue
+        c["count"] += 1
+        t = times[key]
+        if when < t[0]:
+            t[0], c["first_seen"] = when, ts
+        if when > t[1]:
+            t[1], c["last_seen"] = when, ts
+    ranked = sorted(clusters, key=lambda k: (-clusters[k]["count"], times[k][0]))  # ties: earliest first
     return {
         "total_lines_processed": processed,
         "total_error_lines": sum(c["count"] for c in clusters.values()),
-        "clusters": ranked[:top],
+        "clusters": [clusters[k] for k in ranked[:top]],
     }
 
 

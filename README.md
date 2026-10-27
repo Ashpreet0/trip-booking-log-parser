@@ -7,7 +7,7 @@ Streams the trip booking incident log one line at a time and prints how many lin
 Message normalisation for clustering (UUIDs, timestamps, request IDs, numeric IDs, numbers → placeholder tokens) is specified in [NORMALISATION_RULES.md](NORMALISATION_RULES.md). The rules below are the parser's line-validity rules.
 
 - Each line is parsed on its own with `json.loads`; nothing is joined across lines and the file is never loaded whole.
-- A line is **malformed** if it is not valid JSON on its own, is not a JSON object, or is missing any of `timestamp`, `level`, `service`, `message` as a non-empty string. Blank lines are malformed too.
+- A line is **malformed** if it is not valid JSON on its own, is not a JSON object, is missing any of `timestamp`, `level`, `service`, `message` as a non-empty string, or has a `timestamp` that isn't ISO 8601 with a timezone (`yesterday` and `2025-03-10T02:53:30.905` are both malformed). Blank lines are malformed too.
 - Malformed lines are counted in their own total and skipped; the parser never stops on a bad line.
 - `level` is compared after `strip().upper()`, so `ERROR`, `error` and ` Error ` would all count as error-level. This log only ever spells it `ERROR`.
 
@@ -174,12 +174,12 @@ Yes, `trip-dispatch` really fails: it has the top two clusters (4 + 4 = 8 of the
 
 The suite is pytest (version pinned in [`requirements-dev.txt`](requirements-dev.txt)). [`test_summarize.py`](test_summarize.py) calls the script's own `normalize()` and `summarize()` directly:
 
-- **Matching errors group:** a normalisation table of real messages from `trip_booking.log` (one row per rule, plus a decimal taken whole and a UUID not chopped), and three real repeats with different trip IDs normalising to the same text.
-- **Broken lines:** a plain-text line and real ERROR line 20 cut off halfway are both malformed, raise no exception mid-stream, and leave the totals at 80 / 24 with identical clusters.
+- **Matching errors group:** a normalisation table of real messages from `trip_booking.log` (one row per rule, plus a decimal taken whole and a UUID not chopped), and two real repeat pairs where more than one kind of value changes: lines 45 / 60 (request ID, trip UUID and `retry_after` 30 vs 60) and lines 50 / 57 (deadline timestamp, `elapsed_ms`, `pool_size`), each normalising to the same text.
+- **Broken lines:** a plain-text line and real ERROR line 20 cut off halfway are both malformed, raise no exception mid-stream, and leave the totals at 80 / 24 with identical clusters. Line 20 with its timestamp changed to `yesterday` or stripped of its timezone is malformed too, not a crash.
 - **Five-cluster summary:** the full run on the real log has five clusters, highest count first; every cluster has a non-empty `normalised_message`, a `service` from the log, a `count` equal to its matching ERROR lines, and `first_seen` / `last_seen` equal to the earliest and latest of those lines.
-- **Also:** same message in two services gives two clusters, earliest-`first_seen` tiebreak, exact output keys, the CLI printing only JSON, and the real log's pinned result (file hash, 80 / 24, the five counts). [`test_parse_log.py`](test_parse_log.py) covers the Stage 1 line checks.
+- **Also:** same message in two services gives two clusters, earliest-`first_seen` tiebreak, `first_seen` / `last_seen` and the tiebreak comparing time rather than text, exact output keys, the CLI printing only JSON, and the real log's pinned result (file hash, 80 / 24, the five counts). [`test_parse_log.py`](test_parse_log.py) covers the Stage 1 line checks.
 
-Each test was checked against deliberately broken copies of `summarize.py` and `parse_log.py` (no tiebreak, grouping by message only, number rule first, integer-only numbers, request-ID rule removed, top four instead of five, bad JSON raising, a broken line counted as an error, `first_seen` / `last_seen` not tracked); every break makes at least one test fail.
+Each test was checked against deliberately broken copies of `summarize.py` and `parse_log.py` (no tiebreak, grouping by message only, number rule first, integer-only numbers, request-ID rule removed, top four instead of five, bad JSON raising, a broken line counted as an error, `first_seen` / `last_seen` not tracked, timestamp or number rule removed, `first_seen` or the tiebreak compared as text, the timezone or bad-timestamp check removed); every break makes the test aimed at it fail. For example, removing the number rule turns the line 45 / 60 collapse test red.
 
 ```bash
 pip install -r requirements-dev.txt
@@ -192,34 +192,37 @@ Passing run, as printed:
 ============================= test session starts ==============================
 platform darwin -- Python 3.14.6, pytest-9.1.1, pluggy-1.7.0 -- /private/tmp/claude-501/-Users-ashpreetsinghanand/d42ef64e-bc97-4fef-99e1-e7293bc729da/scratchpad/venv/bin/python3
 rootdir: /Users/ashpreetsinghanand/Desktop/zero/trip-booking-log-parser
-collecting ... collected 21 items
+collecting ... collected 24 items
 
 test_parse_log.py::SummarizeTest::test_counts_and_skips_malformed PASSED [  4%]
-test_parse_log.py::SummarizeTest::test_real_log_adds_up PASSED           [  9%]
-test_summarize.py::test_normalize_table[line50] PASSED                   [ 14%]
-test_summarize.py::test_normalize_table[line20] PASSED                   [ 19%]
-test_summarize.py::test_normalize_table[line35] PASSED                   [ 23%]
-test_summarize.py::test_normalize_table[line38] PASSED                   [ 28%]
-test_summarize.py::test_normalize_table[line66] PASSED                   [ 33%]
-test_summarize.py::test_normalize_table[line7] PASSED                    [ 38%]
-test_summarize.py::test_normalize_table[line2] PASSED                    [ 42%]
-test_summarize.py::test_repeats_normalise_identically PASSED             [ 47%]
-test_summarize.py::test_same_message_in_two_services_is_two_clusters PASSED [ 52%]
-test_summarize.py::test_only_valid_error_lines_are_clustered PASSED      [ 57%]
-test_summarize.py::test_top_five_sorted_by_count_highest_first PASSED    [ 61%]
-test_summarize.py::test_tie_goes_to_earliest_first_seen_whatever_the_input_order PASSED [ 66%]
-test_summarize.py::test_first_and_last_seen PASSED                       [ 71%]
-test_summarize.py::test_output_keys PASSED                               [ 76%]
-test_summarize.py::test_real_log_pinned_result PASSED                    [ 80%]
-test_summarize.py::test_broken_lines_are_malformed_and_leave_totals_unchanged PASSED [ 85%]
-test_summarize.py::test_every_cluster_in_the_real_run_is_complete PASSED [ 90%]
-test_summarize.py::test_cli_prints_only_one_json_object PASSED           [ 95%]
-test_summarize.py::test_first_seen_with_mixed_timestamp_precision XFAIL  [100%]
+test_parse_log.py::SummarizeTest::test_real_log_adds_up PASSED           [  8%]
+test_summarize.py::test_normalize_table[line50] PASSED                   [ 12%]
+test_summarize.py::test_normalize_table[line20] PASSED                   [ 16%]
+test_summarize.py::test_normalize_table[line35] PASSED                   [ 20%]
+test_summarize.py::test_normalize_table[line38] PASSED                   [ 25%]
+test_summarize.py::test_normalize_table[line66] PASSED                   [ 29%]
+test_summarize.py::test_normalize_table[line7] PASSED                    [ 33%]
+test_summarize.py::test_normalize_table[line2] PASSED                    [ 37%]
+test_summarize.py::test_repeats_normalise_identically[line45-line60] PASSED [ 41%]
+test_summarize.py::test_repeats_normalise_identically[line50-line57] PASSED [ 45%]
+test_summarize.py::test_same_message_in_two_services_is_two_clusters PASSED [ 50%]
+test_summarize.py::test_only_valid_error_lines_are_clustered PASSED      [ 54%]
+test_summarize.py::test_top_five_sorted_by_count_highest_first PASSED    [ 58%]
+test_summarize.py::test_tie_goes_to_earliest_first_seen_whatever_the_input_order PASSED [ 62%]
+test_summarize.py::test_first_and_last_seen PASSED                       [ 66%]
+test_summarize.py::test_output_keys PASSED                               [ 70%]
+test_summarize.py::test_real_log_pinned_result PASSED                    [ 75%]
+test_summarize.py::test_broken_lines_are_malformed_and_leave_totals_unchanged PASSED [ 79%]
+test_summarize.py::test_every_cluster_in_the_real_run_is_complete PASSED [ 83%]
+test_summarize.py::test_cli_prints_only_one_json_object PASSED           [ 87%]
+test_summarize.py::test_first_and_last_seen_compare_time_not_text PASSED [ 91%]
+test_summarize.py::test_tiebreak_compares_time_not_text PASSED           [ 95%]
+test_summarize.py::test_unusable_timestamps_are_malformed_not_a_crash PASSED [100%]
 
-======================== 20 passed, 1 xfailed in 0.06s =========================
+============================== 24 passed in 0.05s ==============================
 ```
 
-**Known bug:** `first_seen`/`last_seen` compare timestamps as text, so a mixed-precision log puts `03:00:00.500Z` before `03:00:00Z`; every timestamp in this log has milliseconds, so this run is unaffected (pinned by the `xfail` test).
+**Bug fixed:** `first_seen` / `last_seen` and the tiebreak compared timestamps as text, so `03:00:00.500Z` sorted before `03:00:00Z`; they now compare parsed times, and a line whose timestamp isn't ISO 8601 with a timezone is malformed instead of a crash.
 
 ## Docker
 
@@ -283,4 +286,4 @@ None. Every one of the 80 lines parses as a standalone JSON object, so malformed
 
 ### What a line must have to be usable
 
-`timestamp`, `level`, `service` and `message`, each a non-empty string. Those four are what the later clustering needs (when, how bad, who, what). `host`, `request_id`, `trip_id` and `duration_ms` are optional because they are legitimately null on many lines, and a bad `request_id` doesn't make the event any less real.
+`timestamp`, `level`, `service` and `message`, each a non-empty string, with `timestamp` a valid ISO 8601 time with a timezone (all 80 lines pass). Those four are what the later clustering needs (when, how bad, who, what). `host`, `request_id`, `trip_id` and `duration_ms` are optional because they are legitimately null on many lines, and a bad `request_id` doesn't make the event any less real.
