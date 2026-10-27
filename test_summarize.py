@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+import parse_log
+from parse_log import parse_line
 from summarize import normalize, summarize
 
 HERE = Path(__file__).parent
@@ -88,6 +90,35 @@ def test_real_log_pinned_result():
         ("trip-dispatch", 4), ("trip-dispatch", 4), ("rider-booking-api", 4), ("matching-engine-v2", 3), ("payments-authorizer", 2),
     ]
     assert out["clusters"][0]["first_seen"] == "2025-03-10T02:53:30.905Z"
+
+
+def test_broken_lines_are_malformed_and_leave_totals_unchanged():
+    plain = "03:14:02.133 ERROR payments auth timed out after 3000ms req=e19b4d0 trip=T55119"  # plain-text format from the incident brief
+    cut = LOG_LINES[19][: len(LOG_LINES[19]) // 2]  # real ERROR line 20, cut off halfway
+    assert parse_line(plain) is None and parse_line(cut) is None
+    assert parse_log.summarize([plain, cut]) == {"processed": 0, "error": 0, "malformed": 2}
+    clean = summarize(LOG_LINES)
+    broken = summarize(LOG_LINES[:40] + [plain, cut] + LOG_LINES[40:])  # no exception mid-stream
+    assert (broken["total_lines_processed"], broken["total_error_lines"]) == (80, 24)
+    assert broken == clean
+
+
+def test_every_cluster_in_the_real_run_is_complete():
+    out = summarize(LOG_LINES)
+    clusters = out["clusters"]
+    assert len(clusters) == 5
+    counts = [c["count"] for c in clusters]
+    assert counts == sorted(counts, reverse=True)
+    records = [json.loads(x) for x in LOG_LINES]
+    for c in clusters:
+        assert isinstance(c["normalised_message"], str) and c["normalised_message"]
+        assert c["service"] in {r["service"] for r in records}
+        assert isinstance(c["count"], int) and c["count"] >= 1
+        group = [r["timestamp"] for r in records
+                 if r["level"] == "ERROR" and r["service"] == c["service"] and normalize(r["message"]) == c["normalised_message"]]
+        assert c["count"] == len(group)
+        assert (c["first_seen"], c["last_seen"]) == (min(group), max(group))
+    assert sum(counts) <= out["total_error_lines"]
 
 
 def test_cli_prints_only_one_json_object():
