@@ -7,11 +7,11 @@ from parse_log import parse_line
 
 # NORMALISATION_RULES.md, in order: specific shapes first, the catch-all number rule last.
 RULES = [
-    (re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z"), "<ts>"),
-    (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"), "<uuid>"),
-    (re.compile(r"\breq_[0-9a-f]+\b"), "<req>"),
-    (re.compile(r"\b[a-z]_\d+\b"), "<id>"),
-    (re.compile(r"(?<![\w.-])\d+(?:\.\d+)?"), "<n>"),
+    (re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z"), "<TS>"),
+    (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"), "<UUID>"),
+    (re.compile(r"\breq_[0-9a-f]+\b"), "<REQ>"),
+    (re.compile(r"\b[a-z]_\d+\b"), "<ID>"),
+    (re.compile(r"(?<![\w.-])\d+(?:\.\d+)?"), "<NUM>"),
 ]
 
 
@@ -43,8 +43,8 @@ def summarize(lines, top=5):
             c["last_seen"] = max(c["last_seen"], ts)
     ranked = sorted(clusters.values(), key=lambda c: (-c["count"], c["first_seen"]))  # ties: earliest first
     return {
-        "lines_processed": processed,
-        "error_lines": sum(c["count"] for c in clusters.values()),
+        "total_lines_processed": processed,
+        "total_error_lines": sum(c["count"] for c in clusters.values()),
         "clusters": ranked[:top],
     }
 

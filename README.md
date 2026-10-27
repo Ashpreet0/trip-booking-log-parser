@@ -57,51 +57,94 @@ wc -l = 80
 
 ## Incident summary
 
-[`summarize.py`](summarize.py) streams the log line by line through the Stage 1 `parse_line`, keeps only `ERROR` lines, normalises each message with `normalize()` (the rules in [NORMALISATION_RULES.md](NORMALISATION_RULES.md)), groups by **service + normalised message**, and prints the five biggest clusters as one JSON object. Clusters are sorted by count, highest first; equal counts go to the earliest `first_seen`. Only the JSON goes to stdout.
+[`summarize.py`](summarize.py) streams the log line by line through the Stage 1 `parse_line`, keeps only `ERROR` lines, cleans each message with `normalize()` (the rules in [NORMALISATION_RULES.md](NORMALISATION_RULES.md)), groups by **cleaned message + service**, and prints the five biggest groups as one JSON object. Groups are sorted by count, highest first; equal counts go to the earliest `first_seen`. Only the JSON goes to stdout.
 
-Command, run from the repo root:
+### Repeats come out identical
+
+Three `trip-dispatch` errors for different trips, run through `normalize()`:
+
+```bash
+python3 -c 'import json
+from summarize import normalize
+lines = open("trip_booking.log", encoding="utf-8").readlines()
+for n in (20, 31, 37):
+    m = json.loads(lines[n - 1])["message"]
+    print(f"line {n} raw:  {m}")
+    print(f"line {n} norm: {normalize(m)}")'
+```
+
+```
+line 20 raw:  Failed to assign driver for trip 4c9f20b8-7a61-4e35-8d0c-1b93e6a5c724 after 3 retries: upstream timeout 5000ms
+line 20 norm: Failed to assign driver for trip <UUID> after <NUM> retries: upstream timeout <NUM>ms
+line 31 raw:  Failed to assign driver for trip d6208af1-9b43-4c07-a58e-3f7d1c90b62a after 3 retries: upstream timeout 5000ms
+line 31 norm: Failed to assign driver for trip <UUID> after <NUM> retries: upstream timeout <NUM>ms
+line 37 raw:  Failed to assign driver for trip 21a9f60d-3c85-4b71-8e49-6a0d7b2c5f13 after 3 retries: upstream timeout 5000ms
+line 37 norm: Failed to assign driver for trip <UUID> after <NUM> retries: upstream timeout <NUM>ms
+```
+
+All three clean to the same text.
+
+### Same message, two services → two groups
+
+No cleaned message appears under two services anywhere in `trip_booking.log`, so this check feeds the real message from line 35 in under two service names (`payments-authorizer` twice, `payments-ledger` once):
+
+```bash
+python3 -c 'import json
+from summarize import summarize
+m = json.loads(open("trip_booking.log", encoding="utf-8").readlines()[34])["message"]
+row = lambda svc, ts: json.dumps({"timestamp": ts, "level": "ERROR", "service": svc, "message": m})
+lines = [row("payments-authorizer", "2025-03-10T03:00:55.409Z"), row("payments-authorizer", "2025-03-10T03:02:27.734Z"), row("payments-ledger", "2025-03-10T03:01:00.000Z")]
+for c in summarize(lines)["clusters"]: print(c["service"], c["count"], c["message"])'
+```
+
+```
+payments-authorizer 2 Card auth call timed out for <REQ> after <NUM>ms
+payments-ledger 1 Card auth call timed out for <REQ> after <NUM>ms
+```
+
+Two groups, each with its own count.
+
+### Run on the outage log
 
 ```bash
 python3 summarize.py trip_booking.log
 ```
 
-Full output, as printed:
-
 ```json
 {
-  "lines_processed": 80,
-  "error_lines": 24,
+  "total_lines_processed": 80,
+  "total_error_lines": 24,
   "clusters": [
     {
-      "message": "Failed to assign driver for trip <uuid> after <n> retries: upstream timeout <n>ms",
+      "message": "Failed to assign driver for trip <UUID> after <NUM> retries: upstream timeout <NUM>ms",
       "service": "trip-dispatch",
       "count": 4,
       "first_seen": "2025-03-10T02:53:30.905Z",
       "last_seen": "2025-03-10T03:01:14.208Z"
     },
     {
-      "message": "Dispatch failed for trip <uuid>: upstream matching-engine-v2 timeout after <n>ms (attempt <n>/<n>)",
+      "message": "Dispatch failed for trip <UUID>: upstream matching-engine-v2 timeout after <NUM>ms (attempt <NUM>/<NUM>)",
       "service": "trip-dispatch",
       "count": 4,
       "first_seen": "2025-03-10T03:03:06.412Z",
       "last_seen": "2025-03-10T03:12:04.851Z"
     },
     {
-      "message": "Booking request <req> failed for trip <uuid> status=<n> retry_after=<n>",
+      "message": "Booking request <REQ> failed for trip <UUID> status=<NUM> retry_after=<NUM>",
       "service": "rider-booking-api",
       "count": 4,
       "first_seen": "2025-03-10T03:03:58.640Z",
       "last_seen": "2025-03-10T03:22:03.982Z"
     },
     {
-      "message": "Candidate pool query exceeded deadline deadline=<ts> elapsed_ms=<n> pool_size=<n>",
+      "message": "Candidate pool query exceeded deadline deadline=<TS> elapsed_ms=<NUM> pool_size=<NUM>",
       "service": "matching-engine-v2",
       "count": 3,
       "first_seen": "2025-03-10T03:06:12.774Z",
       "last_seen": "2025-03-10T03:14:30.618Z"
     },
     {
-      "message": "Card auth call timed out for <req> after <n>ms",
+      "message": "Card auth call timed out for <REQ> after <NUM>ms",
       "service": "payments-authorizer",
       "count": 2,
       "first_seen": "2025-03-10T03:00:55.409Z",
@@ -111,7 +154,21 @@ Full output, as printed:
 }
 ```
 
-**Verdict.** The top cluster is `trip-dispatch` failing to assign drivers on an upstream timeout (4 errors), and it holds the earliest error in the whole dump at 02:53:30 UTC, more than six minutes before any other service errors. Cluster 2 is the same dispatch timeout worded differently and names `matching-engine-v2`, whose own deadline errors are cluster 4, while the `rider-booking-api` 503s in cluster 3 are the knock-on effect of dispatch being down. Start with trip-dispatch and its upstream `matching-engine-v2`; the booking and payment errors are downstream.
+Count order check:
+
+```bash
+python3 summarize.py trip_booking.log | python3 -c 'import json, sys
+counts = [c["count"] for c in json.load(sys.stdin)["clusters"]]
+print(len(counts), "clusters, counts", counts, "highest first:", counts == sorted(counts, reverse=True))'
+```
+
+```
+5 clusters, counts [4, 4, 4, 3, 2] highest first: True
+```
+
+### Verdict
+
+Yes, `trip-dispatch` really fails: it owns the top cluster (4 errors, first seen 02:53:30 UTC, the earliest error in the log) and the second one (4), so 8 of the 24 error lines in the output are trip-dispatch failing to assign drivers. It is not the root cause, though: cluster 2's messages name `matching-engine-v2` as the upstream that timed out, and `matching-engine-v2` logs its own 3 deadline errors in cluster 4. Fix the matching engine; trip-dispatch and the rider-booking-api 503s (4) recover with it.
 
 ## Testing
 
