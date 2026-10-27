@@ -1,38 +1,102 @@
+import hashlib
 import json
-import unittest
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
 
 from summarize import normalize, summarize
 
-
-def line(service, message, ts="2025-03-10T03:00:00.000Z", level="ERROR"):
-    return json.dumps({"timestamp": ts, "level": level, "service": service, "message": message})
-
-
-class SummarizeTest(unittest.TestCase):
-    def test_normalize_collapses_same_failure(self):
-        # lines 45 and 60 of trip_booking.log
-        a = normalize("Booking request req_2c8f15a9d04e failed for trip 5be09f3a-1c74-4d2e-8f61-7a30b9e2c4d5 status=503 retry_after=30")
-        b = normalize("Booking request req_3e7b0f19c2d8 failed for trip b1a59e3d-7f02-4c68-9d4e-0a8f2c6b5e13 status=503 retry_after=60")
-        self.assertEqual(a, b)
-        self.assertEqual(a, "Booking request <REQ> failed for trip <UUID> status=<NUM> retry_after=<NUM>")
-
-    def test_groups_by_service_and_message_sorted_by_count(self):
-        lines = [
-            line("a", "timed out after 100ms", ts="2025-03-10T03:00:02.000Z"),
-            line("b", "timed out after 200ms", ts="2025-03-10T03:00:01.000Z"),  # same message, other service
-            line("a", "timed out after 300ms", ts="2025-03-10T03:00:03.000Z"),
-            line("a", "ok", level="INFO"),
-            "not json",
-        ]
-        out = summarize(lines)
-        self.assertEqual(list(out), ["total_lines_processed", "total_error_lines", "clusters"])
-        self.assertEqual(list(out["clusters"][0]), ["normalised_message", "service", "count", "first_seen", "last_seen"])
-        self.assertEqual(out["total_lines_processed"], 4)
-        self.assertEqual(out["total_error_lines"], 3)
-        self.assertEqual([(c["service"], c["count"]) for c in out["clusters"]], [("a", 2), ("b", 1)])
-        self.assertEqual(out["clusters"][0]["first_seen"], "2025-03-10T03:00:02.000Z")
-        self.assertEqual(out["clusters"][0]["last_seen"], "2025-03-10T03:00:03.000Z")
+HERE = Path(__file__).parent
+LOG = HERE / "trip_booking.log"
+LOG_LINES = LOG.read_text(encoding="utf-8").splitlines()
 
 
-if __name__ == "__main__":
-    unittest.main()
+def message(n):
+    """The `message` of line n of trip_booking.log (1-based)."""
+    return json.loads(LOG_LINES[n - 1])["message"]
+
+
+def line(service, msg, ts="2025-03-10T03:00:00.000Z", level="ERROR"):
+    return json.dumps({"timestamp": ts, "level": level, "service": service, "message": msg})
+
+
+# Normalisation table: real messages from the log, run through the script's own normalize().
+NORMALISE_TABLE = [
+    (50, "Candidate pool query exceeded deadline deadline=<TS> elapsed_ms=<NUM> pool_size=<NUM>"),  # ISO timestamp
+    (20, "Failed to assign driver for trip <UUID> after <NUM> retries: upstream timeout <NUM>ms"),  # UUID
+    (35, "Card auth call timed out for <REQ> after <NUM>ms"),  # request ID
+    (38, "Stale location for driver <ID> age=<NUM>s"),  # prefixed numeric ID
+    (66, "Payment hold failed for trip <UUID> amount=<NUM> code=GATEWAY_TIMEOUT"),  # decimal taken whole
+    (7, "Upstream p99 latency <NUM>ms above target <NUM>ms path=/v2/trips/dispatch"),  # p99, /v2/ kept
+    (2, "Booking request <REQ> accepted for trip <UUID> status=<NUM>"),  # UUID starting with a digit not chopped
+]
+
+
+@pytest.mark.parametrize("n, expected", NORMALISE_TABLE, ids=[f"line{n}" for n, _ in NORMALISE_TABLE])
+def test_normalize_table(n, expected):
+    assert normalize(message(n)) == expected
+
+
+def test_repeats_normalise_identically():
+    assert normalize(message(20)) == normalize(message(31)) == normalize(message(37))
+
+
+def test_same_message_in_two_services_is_two_clusters():
+    m = message(35)
+    out = summarize([line("payments-authorizer", m), line("payments-authorizer", m), line("payments-ledger", m)])
+    assert [(c["service"], c["count"]) for c in out["clusters"]] == [("payments-authorizer", 2), ("payments-ledger", 1)]
+
+
+def test_only_valid_error_lines_are_clustered():
+    out = summarize([line("a", "boom"), line("a", "fine", level="INFO"), line("a", "loud", level=" error "), "not json", ""])
+    assert out["total_lines_processed"] == 3
+    assert out["total_error_lines"] == 2
+
+
+def test_top_five_sorted_by_count_highest_first():
+    lines = [line(f"svc{i}", "x") for i in range(1, 7) for _ in range(i)]  # svc1 x1 ... svc6 x6
+    out = summarize(lines)
+    assert [c["count"] for c in out["clusters"]] == [6, 5, 4, 3, 2]
+    assert out["total_error_lines"] == 21  # all groups, not just the top five
+
+
+def test_tie_goes_to_earliest_first_seen_whatever_the_input_order():
+    late = line("late", "x", ts="2025-03-10T03:10:00.000Z")
+    early = line("early", "x", ts="2025-03-10T03:00:00.000Z")
+    assert [c["service"] for c in summarize([late, early])["clusters"]] == ["early", "late"]
+
+
+def test_first_and_last_seen():
+    out = summarize([line("a", "x", ts=t) for t in ("2025-03-10T03:00:05.000Z", "2025-03-10T03:00:01.000Z", "2025-03-10T03:00:09.000Z")])
+    c = out["clusters"][0]
+    assert (c["first_seen"], c["last_seen"]) == ("2025-03-10T03:00:01.000Z", "2025-03-10T03:00:09.000Z")
+
+
+def test_output_keys():
+    out = summarize([line("a", "x")])
+    assert list(out) == ["total_lines_processed", "total_error_lines", "clusters"]
+    assert list(out["clusters"][0]) == ["normalised_message", "service", "count", "first_seen", "last_seen"]
+
+
+def test_real_log_pinned_result():
+    assert hashlib.sha256(LOG.read_bytes()).hexdigest() == "cfcf7c74fa968b5d7cff6640f5dab4efa11e6563425a42dd53f67d234c34f3e2"
+    out = summarize(LOG_LINES)
+    assert (out["total_lines_processed"], out["total_error_lines"]) == (80, 24)
+    assert [(c["service"], c["count"]) for c in out["clusters"]] == [
+        ("trip-dispatch", 4), ("trip-dispatch", 4), ("rider-booking-api", 4), ("matching-engine-v2", 3), ("payments-authorizer", 2),
+    ]
+    assert out["clusters"][0]["first_seen"] == "2025-03-10T02:53:30.905Z"
+
+
+def test_cli_prints_only_one_json_object():
+    run = subprocess.run([sys.executable, "summarize.py", "trip_booking.log"], cwd=HERE, capture_output=True, text=True, check=True)
+    assert json.loads(run.stdout)["total_error_lines"] == 24
+    assert run.stderr == ""
+
+
+@pytest.mark.xfail(strict=True, reason="known bug: first_seen compares timestamps as text, so 00.500Z sorts before 00Z")
+def test_first_seen_with_mixed_timestamp_precision():
+    out = summarize([line("a", "x", ts="2025-03-10T03:00:00.500Z"), line("a", "x", ts="2025-03-10T03:00:00Z")])
+    assert out["clusters"][0]["first_seen"] == "2025-03-10T03:00:00Z"

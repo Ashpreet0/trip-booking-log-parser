@@ -172,15 +172,47 @@ Yes, `trip-dispatch` really fails: it has the top two clusters (4 + 4 = 8 of the
 
 ## Testing
 
-Python 3 standard library only, no dependencies.
+The suite is pytest (version pinned in [`requirements-dev.txt`](requirements-dev.txt)). [`test_summarize.py`](test_summarize.py) calls the script's own `normalize()` and `summarize()` directly: a normalisation table of real messages from `trip_booking.log` (one row per rule, plus the decimal and UUID-not-chopped cases), repeats collapsing, the same message in two services giving two clusters, only valid ERROR lines counted, top five sorted by count, the earliest-`first_seen` tiebreak, the exact output keys, the CLI printing only JSON, and the real log's pinned result (file hash, 80 / 24, the five cluster counts). [`test_parse_log.py`](test_parse_log.py) covers the Stage 1 line checks.
+
+Each test was checked against a deliberately broken `summarize.py` (no tiebreak, grouping by message only, number rule first, integer-only numbers, request-ID rule removed, top four instead of five); every break makes at least one test fail.
 
 ```bash
-python3 -m unittest -v
+pip install -r requirements-dev.txt
+python3 -m pytest -v
 ```
 
-or, with pytest installed, `pytest -q`. `summarize.normalize` is a standalone function so it can be tested directly.
+Passing run, as printed:
 
-The tests feed valid lines, a trailing-comma line, invalid JSON, a non-object, a line missing `message`, a blank line and a lowercase ` error ` level, and check that processed + malformed equals the line count of `trip_booking.log`.
+```
+============================= test session starts ==============================
+platform darwin -- Python 3.14.6, pytest-9.1.1, pluggy-1.7.0 -- /private/tmp/claude-501/-Users-ashpreetsinghanand/d42ef64e-bc97-4fef-99e1-e7293bc729da/scratchpad/venv/bin/python3
+rootdir: /Users/ashpreetsinghanand/Desktop/zero/trip-booking-log-parser
+collecting ... collected 19 items
+
+test_parse_log.py::SummarizeTest::test_counts_and_skips_malformed PASSED [  5%]
+test_parse_log.py::SummarizeTest::test_real_log_adds_up PASSED           [ 10%]
+test_summarize.py::test_normalize_table[line50] PASSED                   [ 15%]
+test_summarize.py::test_normalize_table[line20] PASSED                   [ 21%]
+test_summarize.py::test_normalize_table[line35] PASSED                   [ 26%]
+test_summarize.py::test_normalize_table[line38] PASSED                   [ 31%]
+test_summarize.py::test_normalize_table[line66] PASSED                   [ 36%]
+test_summarize.py::test_normalize_table[line7] PASSED                    [ 42%]
+test_summarize.py::test_normalize_table[line2] PASSED                    [ 47%]
+test_summarize.py::test_repeats_normalise_identically PASSED             [ 52%]
+test_summarize.py::test_same_message_in_two_services_is_two_clusters PASSED [ 57%]
+test_summarize.py::test_only_valid_error_lines_are_clustered PASSED      [ 63%]
+test_summarize.py::test_top_five_sorted_by_count_highest_first PASSED    [ 68%]
+test_summarize.py::test_tie_goes_to_earliest_first_seen_whatever_the_input_order PASSED [ 73%]
+test_summarize.py::test_first_and_last_seen PASSED                       [ 78%]
+test_summarize.py::test_output_keys PASSED                               [ 84%]
+test_summarize.py::test_real_log_pinned_result PASSED                    [ 89%]
+test_summarize.py::test_cli_prints_only_one_json_object PASSED           [ 94%]
+test_summarize.py::test_first_seen_with_mixed_timestamp_precision XFAIL  [100%]
+
+======================== 18 passed, 1 xfailed in 0.06s =========================
+```
+
+**Known bug:** `first_seen`/`last_seen` compare timestamps as text, so a mixed-precision log puts `03:00:00.500Z` before `03:00:00Z`; every timestamp in this log has milliseconds, so this run is unaffected (pinned by the `xfail` test).
 
 ## Docker
 
