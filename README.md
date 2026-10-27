@@ -91,7 +91,23 @@ None. Every one of the 80 lines parses as a standalone JSON object, so malformed
 
 ### Other findings
 
-- Line 22 has a corrupted `request_id`: `req_1f76b0d девять` (non-hex, contains a space and Cyrillic). The line is still valid and usable, so it is processed.
+- Line 22 has a corrupted `request_id`. The exact line, from `sed -n '22p' trip_booking.log`:
+
+  ```
+  {"timestamp": "2025-03-10T02:54:52.618Z", "level": "WARN", "service": "api-gateway", "host": "api-gateway-2r6ks", "request_id": "req_1f76b0d девять", "trip_id": null, "message": "Upstream p99 latency 1210.4ms above target 500ms path=/v2/trips/dispatch", "duration_ms": null}
+  ```
+
+  The `request_id` is `req_1f76b0d девять`: 7 hex chars instead of 12, then a space, then the Cyrillic word `девять` (Russian for "nine"; code points U+0434 U+0435 U+0432 U+044F U+0442 U+044C). It sits inside a properly quoted JSON string, so the line is still valid JSON. Proof:
+
+  ```bash
+  sed -n '22p' trip_booking.log | python3 -c 'import sys, json; r = json.loads(sys.stdin.read()); print(type(r).__name__, repr(r["request_id"]))'
+  ```
+
+  ```
+  dict 'req_1f76b0d девять'
+  ```
+
+  It parses to an object with `timestamp`, `level`, `service` and `message` all present, so the parser counts it as processed, not malformed (it is one of the 80 processed). `request_id` is not a required field, so the bad value doesn't disqualify it. Treat it as untrustworthy for joining with other lines by request ID.
 - 9 lines have `request_id: null`: `matching-engine-v2` 4, `driver-location` 3, `surge-pricing` 1, `trip-dispatch` 1. These are background events (pool queries, location lag, index rebuilds, config reloads), not rider requests.
 - Errors by service: `trip-dispatch` 11, `rider-booking-api` 5, `payments-authorizer` 4, `matching-engine-v2` 3, `driver-location` 1.
 
