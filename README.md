@@ -92,7 +92,7 @@ None. Every one of the 80 lines parses as a standalone JSON object, so malformed
 ### Other findings
 
 - Line 22 has a corrupted `request_id`: `req_1f76b0d девять` (non-hex, contains a space and Cyrillic). The line is still valid and usable, so it is processed.
-- 9 lines have `request_id: null`, mostly `matching-engine-v2` and background jobs such as config reloads and index rebuilds.
+- 9 lines have `request_id: null`: `matching-engine-v2` 4, `driver-location` 3, `surge-pricing` 1, `trip-dispatch` 1. These are background events (pool queries, location lag, index rebuilds, config reloads), not rider requests.
 - Errors by service: `trip-dispatch` 11, `rider-booking-api` 5, `payments-authorizer` 4, `matching-engine-v2` 3, `driver-location` 1.
 
 ### What a line must have to be usable
