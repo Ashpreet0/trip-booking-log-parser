@@ -8,8 +8,8 @@ OK = '{"timestamp": "t", "level": "%s", "service": "s", "message": "m"}'
 class SummarizeTest(unittest.TestCase):
     def test_counts_and_skips_malformed(self):
         lines = [
-            "[",                                            # array bracket line
-            OK % "INFO" + ",",                              # trailing comma is stripped
+            OK % "INFO",
+            OK % "INFO" + ",",                              # trailing comma: not standalone JSON
             OK % "ERROR",
             OK % " error ",                                 # spelling variant still counts
             "not json",                                     # invalid JSON

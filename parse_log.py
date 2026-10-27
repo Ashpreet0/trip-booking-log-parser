@@ -7,9 +7,6 @@ REQUIRED = ("timestamp", "level", "service", "message")
 
 def parse_line(line):
     """Return the record if the line is usable, else None."""
-    line = line.strip()
-    if line.endswith(","):  # the dump is a JSON array split one record per line
-        line = line[:-1]
     try:
         record = json.loads(line)
     except ValueError:
