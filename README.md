@@ -55,6 +55,64 @@ wc -l = 80
 
 - Error-level: 24, which matches `grep -c '"level": "ERROR"' trip_booking.log` → `24`.
 
+## Incident summary
+
+[`summarize.py`](summarize.py) streams the log line by line through the Stage 1 `parse_line`, keeps only `ERROR` lines, normalises each message with `normalize()` (the rules in [NORMALISATION_RULES.md](NORMALISATION_RULES.md)), groups by **service + normalised message**, and prints the five biggest clusters as one JSON object. Clusters are sorted by count, highest first; equal counts go to the earliest `first_seen`. Only the JSON goes to stdout.
+
+Command, run from the repo root:
+
+```bash
+python3 summarize.py trip_booking.log
+```
+
+Full output, as printed:
+
+```json
+{
+  "lines_processed": 80,
+  "error_lines": 24,
+  "clusters": [
+    {
+      "message": "Failed to assign driver for trip <uuid> after <n> retries: upstream timeout <n>ms",
+      "service": "trip-dispatch",
+      "count": 4,
+      "first_seen": "2025-03-10T02:53:30.905Z",
+      "last_seen": "2025-03-10T03:01:14.208Z"
+    },
+    {
+      "message": "Dispatch failed for trip <uuid>: upstream matching-engine-v2 timeout after <n>ms (attempt <n>/<n>)",
+      "service": "trip-dispatch",
+      "count": 4,
+      "first_seen": "2025-03-10T03:03:06.412Z",
+      "last_seen": "2025-03-10T03:12:04.851Z"
+    },
+    {
+      "message": "Booking request <req> failed for trip <uuid> status=<n> retry_after=<n>",
+      "service": "rider-booking-api",
+      "count": 4,
+      "first_seen": "2025-03-10T03:03:58.640Z",
+      "last_seen": "2025-03-10T03:22:03.982Z"
+    },
+    {
+      "message": "Candidate pool query exceeded deadline deadline=<ts> elapsed_ms=<n> pool_size=<n>",
+      "service": "matching-engine-v2",
+      "count": 3,
+      "first_seen": "2025-03-10T03:06:12.774Z",
+      "last_seen": "2025-03-10T03:14:30.618Z"
+    },
+    {
+      "message": "Card auth call timed out for <req> after <n>ms",
+      "service": "payments-authorizer",
+      "count": 2,
+      "first_seen": "2025-03-10T03:00:55.409Z",
+      "last_seen": "2025-03-10T03:02:27.734Z"
+    }
+  ]
+}
+```
+
+**Verdict.** The top cluster is `trip-dispatch` failing to assign drivers on an upstream timeout (4 errors), and it holds the earliest error in the whole dump at 02:53:30 UTC, more than six minutes before any other service errors. Cluster 2 is the same dispatch timeout worded differently and names `matching-engine-v2`, whose own deadline errors are cluster 4, while the `rider-booking-api` 503s in cluster 3 are the knock-on effect of dispatch being down. Start with trip-dispatch and its upstream `matching-engine-v2`; the booking and payment errors are downstream.
+
 ## Testing
 
 Python 3 standard library only, no dependencies.
@@ -62,6 +120,8 @@ Python 3 standard library only, no dependencies.
 ```bash
 python3 -m unittest -v
 ```
+
+or, with pytest installed, `pytest -q`. `summarize.normalize` is a standalone function so it can be tested directly.
 
 The tests feed valid lines, a trailing-comma line, invalid JSON, a non-object, a line missing `message`, a blank line and a lowercase ` error ` level, and check that processed + malformed equals the line count of `trip_booking.log`.
 
