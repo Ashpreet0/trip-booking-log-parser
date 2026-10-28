@@ -30,49 +30,64 @@ docker run --rm -v "$PWD/incident.log:/logs/incident.log:ro" 3am /logs/incident.
   - The counts don't include those lines, so **if you see this warning, the real numbers may be higher**. Open those line numbers in the log.
   - The run still exits 0, because the summary of the readable lines is valid.
 
-**What the top cluster means (11 March fare-quote log):** fare-quote-service's surge multiplier lookup timed out on Redis at least 5 times, starting at 01:13:14 UTC, before any other error. The trip-dispatch, rider-app-bff and eta-service errors come later and are on the same trips, so check the surge-pricing Redis shards first.
+**What the top cluster means:** pending. The line for the 11 March fare-quote incident is written from its full log, which is blocked (see Verification).
 
 ## Verification
 
-Run on the **held-out 11 March 2025 fare-quote log**, which the tool had never seen, from a fresh clone into a brand-new folder.
+### Status: blocked, because the held-out log is truncated
 
-**Which commit was tested:** `f01b67e`. The commit you open is the one after it, and it changes **only this README**. README.md is listed in `.dockerignore`, so it can't change the build or the image. To check that what you clone is what was tested:
+The held-out file "Held-out incident log dump: 11 March 2025 fare-quote incident" has **50 lines**. The brief describes **150 lines, 3 malformed, 5 clusters**.
+- It stops mid-record at 01:19:50 UTC, so it covers only 01:10 to 01:19 of the incident window.
+- Two downloads (15:06 and 15:30) are byte-identical, so the resource is serving the short file. The download didn't fail.
+- Needed: a re-uploaded 150-line copy from the owner of the stage materials.
+- **No held-out result is claimed until that copy arrives.** The container will be rerun only once `wc -l` matches 150 and the last line is complete.
+
+Checks on the download:
+
+```text
+$ ls -l
+-rw-r--r--@ 1 8990 Oct 28 15:30 Held-out incident log dump: 11 March 2025 fare-quote incident.jsonl
+$ wc -c
+8990
+$ wc -l
+49
+$ tail -n 1
+{"timestamp":"2025-03-11T01:19:50.330Z","level":"W
+$ shasum -a 256
+0d2ba380cc857b463b75b30028557ce08308bffdd1a2b1cf4f46be2484b786c9
+$ head -n 1 | cut -c1-40   # first timestamp
+{"timestamp":"2025-03-11T01:10:02.145Z",
+```
+
+- `wc -l` prints 49 because it counts newline characters, and the last line has none. That makes 50 lines.
+- The last record ends at `"level":"W`. A file that ends like that stopped early.
+
+**Where I went wrong:** I first ran the container on this short file and explained its 4 clusters before checking the input was whole. The tool's own warning flagged line 50 as unreadable, and that was the clue.
+
+### Fixes needed so far: yes, three
+
+All three were found while running the short file, and the 10 March log showed none of them. They hold whatever the full file contains.
+1. `-v` rejected the downloaded filename with exit 125 and "too many colons", because the name contains a colon. The Run step now copies the log to `incident.log` first.
+2. Short hex trip IDs like `b2e7c410` weren't normalised, so one failure was split across several clusters.
+   - Fixed with a short-hex-ID rule. It changes nothing in the 10 March log.
+   - Covered by `test_trip_id_in_any_shape_is_one_cluster`.
+3. Unreadable lines were dropped without a word. A warning on stderr now names them, and stdout stays pure JSON.
+   - Covered by `test_cli_warns_on_stderr_about_unreadable_lines`.
+
+### What is verified without the held-out log
+
+This is a fresh clone into a brand-new folder, at commit `f01b67e`. Later commits change only this README, and README.md is listed in `.dockerignore`. To check:
 
 ```bash
-git diff --stat f01b67e HEAD   # lists README.md only
+git diff --stat f01b67e HEAD   # README.md only
 git ls-tree HEAD -- Dockerfile .dockerignore requirements-dev.txt parse_log.py summarize.py test_parse_log.py test_summarize.py
 ```
 
 The second command prints the same blob hashes as the transcript below. A blob hash is a fingerprint of a file's contents.
 
-The build log says `transferring dockerfile: 394B` for the 355-byte Dockerfile. That's BuildKit's transfer size, which adds 39 bytes of overhead, not a different file. A 100-byte Dockerfile prints `137B`.
+The build log says `transferring dockerfile: 394B` for the 355-byte Dockerfile. That's BuildKit's transfer size, which adds 39 bytes of overhead. A 100-byte Dockerfile prints `137B`.
 
-### Do the numbers match the log?
-
-| The log file | The output |
-|---|---|
-| 50 lines (`awk` below) | 48 processed, plus a stderr warning: **2 unreadable, lines 38 and 50** |
-| 10 lines say `"level":"ERROR"` (`grep` below) | `total_error_lines` 9. The 10th is line 38, which is cut off mid-record, so its message is lost. It's from fare-quote-service at 01:17:26, so the top cluster is probably 6, not 5 |
-| 9 readable ERROR lines, 4 distinct failures | 4 clusters: 5 + 2 + 1 + 1 = 9 |
-
-The brief expected five clusters, but **the log holds four failures**.
-- The only way to get five is to keep the one UUID-shaped trip ID apart from the four short hex ones. That would count one Redis timeout twice.
-- The earlier five-cluster run was the bug in fix 2 below.
-
-**Fixes needed: yes, three. All three were found by running the held-out log, and none showed up on the 10 March log.**
-1. `-v` rejected the downloaded filename with exit 125 and "too many colons", because the name contains a colon. The Run step now copies the log to `incident.log` first.
-2. Short hex trip IDs like `b2e7c410` weren't normalised, so one failure was split across four clusters and a downstream symptom ranked first.
-   - Fixed with a short-hex-ID rule. It changes nothing in the 10 March log.
-   - Covered by `test_trip_id_in_any_shape_is_one_cluster`, which goes red when the rule is removed.
-3. The output said 48 lines and 9 errors and never mentioned that 2 lines, one of them an ERROR, were lost.
-   - It now prints a warning on stderr naming the line numbers. stdout stays pure JSON.
-   - Covered by `test_cli_warns_on_stderr_about_unreadable_lines`, which goes red when the warning is removed.
-
-One problem was in my verification script, not in the tool: it first redirected the warning into `out.json` and broke the parse check. I fixed the script and reran everything from a new clone. That rerun is what's below.
-
-### Build output, as printed
-
-The build adds `--no-cache` so that no step comes from an earlier build. Otherwise it is the README build command.
+Build output, as printed. The build adds `--no-cache` so that no step comes from an earlier build. Otherwise it is the README build command.
 
 ```text
 $ git clone https://github.com/Ashpreet0/trip-booking-log-parser.git && cd trip-booking-log-parser
@@ -162,59 +177,9 @@ View build details: docker-desktop://dashboard/build/desktop-linux/desktop-linux
 build exit status: 0
 ```
 
-### Run, exit status, runtime, parse check, reconciliation, pytest in the container, image contents, as printed
+Pytest inside the container, and the image contents (no log baked in), as printed:
 
 ```text
-$ cp ~/Downloads/"Held-out incident log dump: 11 March 2025 fare-quote incident.jsonl" incident.log
-$ shasum -a 256 incident.log
-0d2ba380cc857b463b75b30028557ce08308bffdd1a2b1cf4f46be2484b786c9  incident.log
-$ docker run --rm -v "$PWD/incident.log:/logs/incident.log:ro" 3am /logs/incident.log > out.json
-warning: skipped 2 unreadable line(s): 38, 50; the counts above leave them out
-exit status: 0
-runtime: 0.33s
-$ cat out.json
-{
-  "total_lines_processed": 48,
-  "total_error_lines": 9,
-  "clusters": [
-    {
-      "normalised_message": "surge multiplier lookup failed for trip <UUID> after <NUM>ms: redis timeout on shard <NUM>",
-      "service": "fare-quote-service",
-      "count": 5,
-      "first_seen": "2025-03-11T01:13:14.902Z",
-      "last_seen": "2025-03-11T01:19:02.140Z"
-    },
-    {
-      "normalised_message": "fare quote unavailable for request <REQ>, returning <NUM>",
-      "service": "trip-dispatch",
-      "count": 2,
-      "first_seen": "2025-03-11T01:14:02.209Z",
-      "last_seen": "2025-03-11T01:16:50.884Z"
-    },
-    {
-      "normalised_message": "upstream fare-quote <NUM> for rider <NUM> after <NUM>ms",
-      "service": "rider-app-bff",
-      "count": 1,
-      "first_seen": "2025-03-11T01:16:26.559Z",
-      "last_seen": "2025-03-11T01:16:26.559Z"
-    },
-    {
-      "normalised_message": "eta model call timed out after <NUM>ms for trip <UUID>",
-      "service": "eta-service",
-      "count": 1,
-      "first_seen": "2025-03-11T01:18:26.318Z",
-      "last_seen": "2025-03-11T01:18:26.318Z"
-    }
-  ]
-}
-$ docker run -i --rm --entrypoint python3 3am -m json.tool --compact < out.json > /dev/null && echo "stdout parses as JSON"
-stdout parses as JSON
-$ awk "END{print NR, \"lines in the file\"}" incident.log
-50 lines in the file
-$ grep -c "\"level\":\"ERROR\"" incident.log
-10
-$ sed -n 38p incident.log
-{"timestamp":"2025-03-11T01:17:26.418Z","level":"ERROR","service":"fare-quote-service","host":"fareq-usw2-11","request_id":"req_7d2a
 $ docker run --rm -v "$PWD/trip_booking.log:/app/trip_booking.log:ro" --entrypoint python3 3am -m pytest -v -p no:cacheprovider
 ============================= test session starts ==============================
 platform linux -- Python 3.13.18, pytest-9.1.1, pluggy-1.7.0 -- /usr/local/bin/python3
