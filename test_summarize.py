@@ -147,6 +147,15 @@ def test_cli_prints_only_one_json_object():
     assert run.stderr == ""
 
 
+def test_cli_warns_on_stderr_about_unreadable_lines(tmp_path):
+    log = tmp_path / "incident.log"
+    cut = LOG_LINES[19][: len(LOG_LINES[19]) // 2]  # an ERROR line cut off, like line 38 of the 11 March log
+    log.write_text("\n".join(LOG_LINES[:3] + [cut] + LOG_LINES[3:5] + ["{\"level\":\"W"]), encoding="utf-8")
+    run = subprocess.run([sys.executable, "summarize.py", str(log)], cwd=HERE, capture_output=True, text=True, check=True)
+    assert json.loads(run.stdout)["total_lines_processed"] == 5  # stdout stays one JSON object
+    assert run.stderr == "warning: skipped 2 unreadable line(s): 4, 7; the counts above leave them out\n"
+
+
 def test_first_and_last_seen_compare_time_not_text():
     # as text ".500Z" < "Z", so a string compare would get both of these backwards
     out = summarize([line("a", "x", ts="2025-03-10T03:00:00.500Z"), line("a", "x", ts="2025-03-10T03:00:00Z")])

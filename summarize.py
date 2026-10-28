@@ -61,8 +61,20 @@ def summarize(lines, top=5):
 def main():
     if len(sys.argv) != 2:
         sys.exit("usage: python3 summarize.py <log-file>")
+    skipped = []
+
+    def lines(f):
+        # note unreadable lines so a cut-off ERROR isn't silently missing from the counts
+        for n, line in enumerate(f, 1):
+            if parse_line(line) is None:
+                skipped.append(n)
+            yield line
+
     with open(sys.argv[1], encoding="utf-8") as f:
-        print(json.dumps(summarize(f), indent=2, ensure_ascii=False))
+        print(json.dumps(summarize(lines(f)), indent=2, ensure_ascii=False))
+    if skipped:
+        print(f"warning: skipped {len(skipped)} unreadable line(s): {', '.join(map(str, skipped))}; "
+              "the counts above leave them out", file=sys.stderr)
 
 
 if __name__ == "__main__":
