@@ -10,6 +10,8 @@ from parse_log import parse_line
 RULES = [
     (re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z"), "<TS>"),
     (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"), "<UUID>"),
+    # short hex trip IDs (7f3a91c2) fill the same field as UUIDs, so they share the token; needs a digit and a letter so words and numbers pass
+    (re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{8,}\b"), "<UUID>"),
     (re.compile(r"\breq_[0-9a-f]+\b"), "<REQ>"),
     (re.compile(r"\b[a-z]_\d+\b"), "<ID>"),
     (re.compile(r"(?<![\w.-])\d+(?:\.\d+)?"), "<NUM>"),

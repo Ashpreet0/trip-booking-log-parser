@@ -10,20 +10,20 @@ docker build -t 3am .
 
 ## Run
 
-From the folder that holds the log:
+Copy the log into this folder as `incident.log`, then run:
 
 ```bash
-docker run --rm -v "$PWD/trip_booking.log:/logs/incident.log:ro" 3am /logs/incident.log
+docker run --rm -v "$PWD/incident.log:/logs/incident.log:ro" 3am /logs/incident.log
 ```
 
-The log is mounted read-only at run time. It is never copied into the image, because the Dockerfile copies only the code and the tests and `.dockerignore` excludes `*.log`. To summarise a different log, change only the left side of `-v`.
+`-v` links that one file from your laptop into the container, read-only. Copy it in first because `-v` splits on `:`, and incident-log downloads often have a colon in their name. The log is never copied into the image: the Dockerfile copies only the script, the tests and `requirements-dev.txt`, `.dockerignore` excludes `*.log`, and `.gitignore` keeps `incident.log` out of git.
 
 ## Reading the output
 
 - `total_lines_processed`: the lines it could read. Broken lines are skipped and don't stop the run.
 - `total_error_lines`: the ERROR lines across all groups, not only the top 5.
 - `clusters`: the same failure grouped together, ranked by `count`, with a tie going to the one that started first.
-  - The tool swaps IDs, UUIDs, request IDs, numbers and timestamps for `<UUID>`, `<NUM>` and similar tokens, so repeats of one failure land in one cluster.
+  - The tool swaps IDs, UUIDs and short hex trip IDs (both shown as `<UUID>`), request IDs, numbers and timestamps for `<UUID>`, `<NUM>` and similar tokens, so repeats of one failure land in one cluster.
   - Each cluster has a `service`, a `count`, and a `first_seen` / `last_seen` time in UTC.
 
 **What the top cluster means:** trip-dispatch began failing to assign drivers at 02:53:30 UTC, before every other cluster. Start with trip-dispatch and what it calls upstream. matching-engine-v2 is named in cluster 2, but its own errors only start at 03:06:12, so it's the leading suspect, not the proven cause.

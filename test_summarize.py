@@ -55,6 +55,16 @@ def test_repeats_normalise_identically(a, b, expected):
     assert normalize(message(a)) == normalize(message(b)) == expected
 
 
+def test_trip_id_in_any_shape_is_one_cluster():
+    # the 11 March held-out log writes one failure with three trip-ID shapes; it must stay one cluster
+    msgs = [f"surge multiplier lookup failed for trip {t} after 3021ms: redis timeout on shard 4"
+            for t in ("7f3a91c2", "b2e7c410", "a0d4e5b1-22c9-4b7e-8f10-6c3e9d2a7b54", "5f10c8b3", "3ac90d17")]
+    out = summarize([line("fare-quote-service", m) for m in msgs] + [line("rider-app-bff", "upstream fare-quote 503 for rider 55219034 after 3050ms")])
+    assert [(c["service"], c["count"]) for c in out["clusters"]] == [("fare-quote-service", 5), ("rider-app-bff", 1)]
+    assert out["clusters"][0]["normalised_message"] == "surge multiplier lookup failed for trip <UUID> after <NUM>ms: redis timeout on shard <NUM>"
+    assert normalize("token refresh ok rider 40118827 accepted deadbeef") == "token refresh ok rider <NUM> accepted deadbeef"  # numbers stay <NUM>, words stay words
+
+
 def test_same_message_in_two_services_is_two_clusters():
     m = message(35)
     out = summarize([line("payments-authorizer", m), line("payments-authorizer", m), line("payments-ledger", m)])
