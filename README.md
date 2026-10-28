@@ -1,114 +1,45 @@
-# trip-booking-log-parser
+# 3am
 
-Streams the trip booking incident log one line at a time and prints how many lines were processed, how many are error-level, and how many were malformed and skipped.
+This tool groups an incident log's ERROR lines into the top 5 repeating failures and prints them as JSON. It needs Docker and nothing else. You don't need to install Python.
 
-## Normalisation rules
-
-Message normalisation for clustering (UUIDs, timestamps, request IDs, numeric IDs, numbers → placeholder tokens) is specified in [NORMALISATION_RULES.md](NORMALISATION_RULES.md). The rules below are the parser's line-validity rules.
-
-- Each line is parsed on its own with `json.loads`; nothing is joined across lines and the file is never loaded whole.
-- A line is **malformed** if it is not valid JSON on its own, is not a JSON object, is missing any of `timestamp`, `level`, `service`, `message` as a non-empty string, or has a `timestamp` that isn't ISO 8601 with a timezone (`yesterday` and `2025-03-10T02:53:30.905` are both malformed). Blank lines are malformed too.
-- Malformed lines are counted in their own total and skipped; the parser never stops on a bad line.
-- `level` is compared after `strip().upper()`, so `ERROR`, `error` and ` Error ` would all count as error-level. This log only ever spells it `ERROR`.
-
-## Summary output
-
-Command, run from the repo root:
+## Build
 
 ```bash
-python3 parse_log.py trip_booking.log
+docker build -t 3am .
 ```
 
-Output, copied as-is:
+## Run
 
-```
-processed: 80
-error-level: 24
-malformed: 0
-```
-
-Line count of the same file:
+From the folder that holds the log:
 
 ```bash
-wc -l trip_booking.log
+docker run --rm -v "$PWD/trip_booking.log:/logs/incident.log:ro" 3am /logs/incident.log
 ```
 
-```
-      80 trip_booking.log
-```
+The log is mounted read-only at run time. It is never copied into the image, because the Dockerfile copies only the code and the tests and `.dockerignore` excludes `*.log`. To summarise a different log, change only the left side of `-v`.
 
-- **Total lines: 80**
-- **Processed: 80**
-- **Malformed: 0**
-- Processed + malformed = 80 + 0 = 80 = total lines.
+## Reading the output
 
-The same sum, computed from the parser's output rather than typed:
+- `total_lines_processed`: the lines it could read. Broken lines are skipped and don't stop the run.
+- `total_error_lines`: the ERROR lines across all groups, not only the top 5.
+- `clusters`: the same failure grouped together, ranked by `count`, with a tie going to the one that started first.
+  - The tool swaps IDs, UUIDs, request IDs, numbers and timestamps for `<UUID>`, `<NUM>` and similar tokens, so repeats of one failure land in one cluster.
+  - Each cluster has a `service`, a `count`, and a `first_seen` / `last_seen` time in UTC.
+
+**What the top cluster means:** trip-dispatch began failing to assign drivers at 02:53:30 UTC, before every other cluster. Start with trip-dispatch and what it calls upstream. matching-engine-v2 is named in cluster 2, but its own errors only start at 03:06:12, so it's the leading suspect, not the proven cause.
+
+## Verification
+
+Run from a fresh clone on a machine with no Python setup, using the incident log `trip_booking.log` (the trip-booking outage dump, 80 lines, sha256 `cfcf7c74…f3e2`).
 
 ```bash
-python3 parse_log.py trip_booking.log | awk -F': ' '/^processed/{p=$2} /^malformed/{m=$2} END{print "processed + malformed = " p " + " m " = " p+m}'; wc -l < trip_booking.log | awk '{print "wc -l = " $1}'
+git clone https://github.com/Ashpreet0/trip-booking-log-parser.git && cd trip-booking-log-parser
+docker build -t 3am .
+docker run --rm -v "$PWD/trip_booking.log:/logs/incident.log:ro" 3am /logs/incident.log
+echo "exit status: $?"
 ```
 
-```
-processed + malformed = 80 + 0 = 80
-wc -l = 80
-```
-
-- Error-level: 24, which matches `grep -c '"level": "ERROR"' trip_booking.log` → `24`.
-
-## Incident summary
-
-[`summarize.py`](summarize.py) streams the log line by line through the Stage 1 `parse_line`, keeps only `ERROR` lines, cleans each message with `normalize()` (the rules in [NORMALISATION_RULES.md](NORMALISATION_RULES.md)), groups by **cleaned message + service**, and prints the five biggest groups as one JSON object. Groups are sorted by count, highest first; equal counts go to the earliest `first_seen`. Only the JSON goes to stdout.
-
-### Repeats come out identical
-
-Three `trip-dispatch` errors for different trips, run through `normalize()`:
-
-```bash
-python3 -c 'import json
-from summarize import normalize
-lines = open("trip_booking.log", encoding="utf-8").readlines()
-for n in (20, 31, 37):
-    m = json.loads(lines[n - 1])["message"]
-    print(f"line {n} raw:  {m}")
-    print(f"line {n} norm: {normalize(m)}")'
-```
-
-```
-line 20 raw:  Failed to assign driver for trip 4c9f20b8-7a61-4e35-8d0c-1b93e6a5c724 after 3 retries: upstream timeout 5000ms
-line 20 norm: Failed to assign driver for trip <UUID> after <NUM> retries: upstream timeout <NUM>ms
-line 31 raw:  Failed to assign driver for trip d6208af1-9b43-4c07-a58e-3f7d1c90b62a after 3 retries: upstream timeout 5000ms
-line 31 norm: Failed to assign driver for trip <UUID> after <NUM> retries: upstream timeout <NUM>ms
-line 37 raw:  Failed to assign driver for trip 21a9f60d-3c85-4b71-8e49-6a0d7b2c5f13 after 3 retries: upstream timeout 5000ms
-line 37 norm: Failed to assign driver for trip <UUID> after <NUM> retries: upstream timeout <NUM>ms
-```
-
-All three clean to the same text.
-
-### Same message, two services → two groups
-
-No cleaned message appears under two services anywhere in `trip_booking.log`, so this check feeds the real message from line 35 in under two service names (`payments-authorizer` twice, `payments-ledger` once):
-
-```bash
-python3 -c 'import json
-from summarize import summarize
-m = json.loads(open("trip_booking.log", encoding="utf-8").readlines()[34])["message"]
-row = lambda svc, ts: json.dumps({"timestamp": ts, "level": "ERROR", "service": svc, "message": m})
-lines = [row("payments-authorizer", "2025-03-10T03:00:55.409Z"), row("payments-authorizer", "2025-03-10T03:02:27.734Z"), row("payments-ledger", "2025-03-10T03:01:00.000Z")]
-for c in summarize(lines)["clusters"]: print(c["service"], c["count"], c["normalised_message"])'
-```
-
-```
-payments-authorizer 2 Card auth call timed out for <REQ> after <NUM>ms
-payments-ledger 1 Card auth call timed out for <REQ> after <NUM>ms
-```
-
-Two groups, each with its own count.
-
-### Run on the outage log
-
-```bash
-python3 summarize.py trip_booking.log
-```
+Full JSON, exactly as the terminal printed it:
 
 ```json
 {
@@ -154,44 +85,19 @@ python3 summarize.py trip_booking.log
 }
 ```
 
-Count order check:
+- Exit status: `0`
+- Runtime: `0.35s` wall clock for the `docker run`, container start included.
+
+Pytest inside the same image, with the log mounted where the tests read it:
 
 ```bash
-python3 summarize.py trip_booking.log | python3 -c 'import json, sys
-counts = [c["count"] for c in json.load(sys.stdin)["clusters"]]
-print(len(counts), "clusters, counts", counts, "highest first:", counts == sorted(counts, reverse=True))'
+docker run --rm -v "$PWD/trip_booking.log:/app/trip_booking.log:ro" --entrypoint python3 3am -m pytest -v -p no:cacheprovider
 ```
 
-```
-5 clusters, counts [4, 4, 4, 3, 2] highest first: True
-```
-
-### Verdict
-
-Yes, `trip-dispatch` really fails: it has the top two clusters (4 + 4 = 8 of the 24 error lines) and the earliest error in the summary, first seen 02:53:30 UTC, before `payments-authorizer` (03:00:55), `rider-booking-api` (03:03:58) and `matching-engine-v2` (03:06:12). The summary does not show what made it fail: cluster 1's messages only say "upstream timeout" without naming the upstream, the first cluster in the summary that names `matching-engine-v2` (cluster 2) starts at 03:03:06, and `matching-engine-v2`'s own errors (cluster 4, 3) start 03:06:12, about 13 minutes after dispatch began failing. Start the investigation at trip-dispatch's upstream calls from 02:53:30; `matching-engine-v2` is the leading suspect, not a proven cause.
-
-## Testing
-
-The suite is pytest (version pinned in [`requirements-dev.txt`](requirements-dev.txt)). [`test_summarize.py`](test_summarize.py) calls the script's own `normalize()` and `summarize()` directly:
-
-- **Matching errors group:** a normalisation table of real messages from `trip_booking.log` (one row per rule, plus a decimal taken whole and a UUID not chopped), and two real repeat pairs where more than one kind of value changes: lines 45 / 60 (request ID, trip UUID and `retry_after` 30 vs 60) and lines 50 / 57 (deadline timestamp, `elapsed_ms`, `pool_size`), each normalising to the same text.
-- **Broken lines:** a plain-text line and real ERROR line 20 cut off halfway are both malformed, raise no exception mid-stream, and leave the totals at 80 / 24 with identical clusters. Line 20 with its timestamp changed to `yesterday` or stripped of its timezone is malformed too, not a crash.
-- **Five-cluster summary:** the full run on the real log has five clusters, highest count first; every cluster has a non-empty `normalised_message`, a `service` from the log, a `count` equal to its matching ERROR lines, and `first_seen` / `last_seen` equal to the earliest and latest of those lines.
-- **Also:** same message in two services gives two clusters, earliest-`first_seen` tiebreak, `first_seen` / `last_seen` and the tiebreak comparing time rather than text, exact output keys, the CLI printing only JSON, and the real log's pinned result (file hash, 80 / 24, the five counts). [`test_parse_log.py`](test_parse_log.py) covers the Stage 1 line checks.
-
-Each test was checked against deliberately broken copies of `summarize.py` and `parse_log.py` (no tiebreak, grouping by message only, number rule first, integer-only numbers, request-ID rule removed, top four instead of five, bad JSON raising, a broken line counted as an error, `first_seen` / `last_seen` not tracked, timestamp or number rule removed, `first_seen` or the tiebreak compared as text, the timezone or bad-timestamp check removed); every break makes the test aimed at it fail. For example, removing the number rule turns the line 45 / 60 collapse test red.
-
-```bash
-pip install -r requirements-dev.txt
-python3 -m pytest -v
-```
-
-Passing run, as printed:
-
-```
+```text
 ============================= test session starts ==============================
-platform darwin -- Python 3.14.6, pytest-9.1.1, pluggy-1.7.0 -- /private/tmp/claude-501/-Users-ashpreetsinghanand/d42ef64e-bc97-4fef-99e1-e7293bc729da/scratchpad/venv/bin/python3
-rootdir: /Users/ashpreetsinghanand/Desktop/zero/trip-booking-log-parser
+platform linux -- Python 3.13.18, pytest-9.1.1, pluggy-1.7.0 -- /usr/local/bin/python3
+rootdir: /app
 collecting ... collected 24 items
 
 test_parse_log.py::SummarizeTest::test_counts_and_skips_malformed PASSED [  4%]
@@ -219,71 +125,7 @@ test_summarize.py::test_first_and_last_seen_compare_time_not_text PASSED [ 91%]
 test_summarize.py::test_tiebreak_compares_time_not_text PASSED           [ 95%]
 test_summarize.py::test_unusable_timestamps_are_malformed_not_a_crash PASSED [100%]
 
-============================== 24 passed in 0.05s ==============================
+============================== 24 passed in 0.07s ==============================
 ```
 
-**Bug fixed:** `first_seen` / `last_seen` and the tiebreak compared timestamps as text, so `03:00:00.500Z` sorted before `03:00:00Z`; they now compare parsed times, and a line whose timestamp isn't ISO 8601 with a timezone is malformed instead of a crash.
-
-## Docker
-
-## Log format notes
-
-`trip_booking.log` is the scenario download `Trip-Booking Outage Incident Log Dump (10 March 2025).jsonl`, copied in unchanged. It is JSON Lines: one JSON object per line, 80 lines, ending in a newline. It covers 2025-03-10 02:45:02Z to 03:29:59Z across 15 services.
-
-### Fields
-
-Every one of the 80 lines carries the same 8 fields, in this order:
-
-| Field | Type | Present / null | Notes |
-|---|---|---|---|
-| `timestamp` | string | 80 / 0 | ISO 8601 UTC with milliseconds, e.g. `2025-03-10T02:45:02.118Z` |
-| `level` | string | 80 / 0 | see below |
-| `service` | string | 80 / 0 | 15 distinct, e.g. `trip-dispatch`, `matching-engine-v2`, `payments-authorizer` |
-| `host` | string | 80 / 0 | pod name, `<service>-<suffix>`, e.g. `trip-dispatch-7f9kq` |
-| `request_id` | string or null | 71 / 9 | normally `req_` + 12 hex chars; null on background events |
-| `trip_id` | string or null | 50 / 30 | UUID; null when the event isn't tied to a trip |
-| `message` | string | 80 / 0 | free text with embedded IDs, durations and key=value pairs |
-| `duration_ms` | integer or null | 59 / 21 | null for events with no duration |
-
-### Values of `level`
-
-Found with `grep -oE '"level": *"[^"]*"' trip_booking.log | sort | uniq -c`:
-
-| Value | Lines |
-|---|---|
-| `INFO` | 36 |
-| `ERROR` | 24 |
-| `WARN` | 14 |
-| `DEBUG` | 6 |
-
-All uppercase. There are no other spellings (no `error`, `Error`, `ERR` or `WARNING`), so a case-sensitive `ERROR` match and the parser's normalised match give the same 24.
-
-### Invalid JSON
-
-None. Every one of the 80 lines parses as a standalone JSON object, so malformed is 0 for this file. The parser still counts and skips bad lines; the tests prove that path.
-
-### Other findings
-
-- Line 22 has a corrupted `request_id`. The exact line, from `sed -n '22p' trip_booking.log`:
-
-  ```
-  {"timestamp": "2025-03-10T02:54:52.618Z", "level": "WARN", "service": "api-gateway", "host": "api-gateway-2r6ks", "request_id": "req_1f76b0d девять", "trip_id": null, "message": "Upstream p99 latency 1210.4ms above target 500ms path=/v2/trips/dispatch", "duration_ms": null}
-  ```
-
-  The `request_id` is `req_1f76b0d девять`: 7 hex chars instead of 12, then a space, then the Cyrillic word `девять` (Russian for "nine"; code points U+0434 U+0435 U+0432 U+044F U+0442 U+044C). It sits inside a properly quoted JSON string, so the line is still valid JSON. Proof:
-
-  ```bash
-  sed -n '22p' trip_booking.log | python3 -c 'import sys, json; r = json.loads(sys.stdin.read()); print(type(r).__name__, repr(r["request_id"]))'
-  ```
-
-  ```
-  dict 'req_1f76b0d девять'
-  ```
-
-  It parses to an object with `timestamp`, `level`, `service` and `message` all present, so the parser counts it as processed, not malformed (it is one of the 80 processed). `request_id` is not a required field, so the bad value doesn't disqualify it. Treat it as untrustworthy for joining with other lines by request ID.
-- 9 lines have `request_id: null`: `matching-engine-v2` 4, `driver-location` 3, `surge-pricing` 1, `trip-dispatch` 1. These are background events (pool queries, location lag, index rebuilds, config reloads), not rider requests.
-- Errors by service: `trip-dispatch` 11, `rider-booking-api` 5, `payments-authorizer` 4, `matching-engine-v2` 3, `driver-location` 1.
-
-### What a line must have to be usable
-
-`timestamp`, `level`, `service` and `message`, each a non-empty string, with `timestamp` a valid ISO 8601 time with a timezone (all 80 lines pass). Those four are what the later clustering needs (when, how bad, who, what). `host`, `request_id`, `trip_id` and `duration_ms` are optional because they are legitimately null on many lines, and a bad `request_id` doesn't make the event any less real.
+Pytest exit status: `0`. `ls /app/*.log` inside the image finds nothing, so the log is not baked in.
