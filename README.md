@@ -86,7 +86,7 @@ Full JSON, exactly as the terminal printed it:
 ```
 
 - Exit status: `0`
-- Runtime: `0.35s` wall clock for the `docker run`, container start included.
+- Runtime: `0.36s` wall clock for the `docker run`, container start included.
 
 Pytest inside the same image, with the log mounted where the tests read it:
 
@@ -125,7 +125,7 @@ test_summarize.py::test_first_and_last_seen_compare_time_not_text PASSED [ 91%]
 test_summarize.py::test_tiebreak_compares_time_not_text PASSED           [ 95%]
 test_summarize.py::test_unusable_timestamps_are_malformed_not_a_crash PASSED [100%]
 
-============================== 24 passed in 0.07s ==============================
+============================== 24 passed in 0.06s ==============================
 ```
 
 Pytest exit status: `0`. `ls /app/*.log` inside the image finds nothing, so the log is not baked in.
